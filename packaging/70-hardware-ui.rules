@@ -1,0 +1,27 @@
+# Device access for hardware-ui.
+#
+# Install:  cp packaging/70-hardware-ui.rules /etc/udev/rules.d/
+#           udevadm control --reload-rules && udevadm trigger
+#
+# The application runs as your user and never as root. These two lines are what make that
+# possible; see docs/INSTALL.md for what each module needs.
+#
+# Matched on the node *type* rather than per vendor and product. A per-device rule would mean a
+# new line for every device bought and one per module; this covers every vendor at once, including
+# hardware no module supports yet.
+#
+# TAG+="uaccess" hands the device to whoever is logged in at the seat, which is the correct
+# semantics for desktop hardware: it follows the session rather than granting a group permanent
+# access to every keyboard and monitor on the machine.
+
+# Vendor control protocols ride on hidraw: Jabra (usage page 0xFF00), Poly Deckard, Logitech
+# HID++, FIDO2/CTAP security keys, Dell docks.
+SUBSYSTEM=="hidraw", MODE="0660", TAG+="uaccess"
+
+# DDC/CI for monitors. The i2c-dev kernel module must also be loaded, and membership of the `i2c`
+# group is what ddcutil itself needs -- see docs/INSTALL.md.
+SUBSYSTEM=="i2c-dev", MODE="0660", TAG+="uaccess"
+
+# Razer devices are deliberately absent: this application talks to the OpenRazer daemon, which
+# owns the hardware through its own kernel drivers and ships its own rules. Add yourself to
+# `plugdev` for those instead.

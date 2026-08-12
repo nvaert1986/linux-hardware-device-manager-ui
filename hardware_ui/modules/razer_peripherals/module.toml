@@ -1,0 +1,39 @@
+id = "razer_peripherals"
+name = "Razer Peripherals"
+category = "input"
+description = "Razer keyboards, mice and headsets through the OpenRazer daemon"
+implementation = "hardware_ui.modules.razer_peripherals.device:RazerDevice"
+
+# OpenRazer is a requirement of THIS MODULE, not of the application. It is not imported until a
+# Razer device is opened, so an installation without it runs normally and simply cannot use this
+# module -- opening a device then explains what to install rather than failing obscurely.
+requires = ["openrazer"]
+
+# Razer's USB vendor id. Matching on it means no module code is imported at startup, and the
+# daemon is only consulted once the user opens a device.
+[[match]]
+transport = "hid"
+vendor_id = "1532"
+status = "family"
+
+[[match]]
+transport = "hid"
+vendor_id = "1532"
+product_id = "0221"
+status = "verified"          # BlackWidow Chroma V2
+
+[[match]]
+transport = "hid"
+vendor_id = "1532"
+product_id = "0084"
+status = "verified"          # DeathAdder V2
+
+# Verified 2026-08-11 by the user changing settings on it through this application. Read back
+# clean: 5 DPI stages, 2 lighting zones (logo and scroll wheel), polling rates 125/500/1000 --
+# none of which is hardcoded anywhere. This model had never been seen by the module, which is the
+# point: the page came from what OpenRazer reported about it.
+[[match]]
+transport = "hid"
+vendor_id = "1532"
+product_id = "005c"
+status = "verified"          # DeathAdder Elite

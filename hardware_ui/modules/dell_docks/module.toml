@@ -1,0 +1,31 @@
+id = "dell_docks"
+name = "Dell Docks"
+category = "docks"
+description = "Read-only information about Dell Thunderbolt and USB docking stations"
+implementation = "hardware_ui.modules.dell_docks.device:DellDock"
+
+# Dell's USB vendor id, narrowed by name so Dell keyboards, mice and monitors are not claimed.
+# Both Thunderbolt and plain USB docks present a Dell-branded HID interface and call themselves
+# a dock, which is the only signal available before anything is opened.
+# Deliberately ungated: any Dell-branded device calling itself a dock is claimed.
+#
+# A WD22TB4 appears twice on USB -- as the dock (two interfaces, HID plus USB Billboard, real
+# serial) and as a bare companion (one HID interface, placeholder serial 0123456789ABCDEF) -- so
+# it is tempting to require more than one interface and show a single row. That was tried and
+# removed: it is a guess from one dock, and if any Dell dock exposes its control interface on a
+# single-interface device, the gate would make that dock disappear from the list entirely.
+#
+# Showing one dock twice is cosmetic. Hiding a dock is not. `usb_multi_interface` and
+# `usb_interfaces` are recorded on every device for whenever this can be decided from more than
+# one model.
+[[match]]
+transport = "hid"
+vendor_id = "413c"
+name_glob = "*dock*"
+status = "family"
+
+[[match]]
+transport = "hid"
+vendor_id = "413c"
+product_id = "b06e"
+status = "verified"          # WD22TB4 Thunderbolt dock

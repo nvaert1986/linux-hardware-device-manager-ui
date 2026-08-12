@@ -1,0 +1,51 @@
+id = "poly_headsets"
+name = "Poly Headsets"
+category = "audio"
+description = "HP Poly / Plantronics headset configuration over the Deckard protocol"
+implementation = "hardware_ui.modules.poly_headsets.device:PolyHeadsetDevice"
+
+# The service UUID is the real matcher: it survives renaming, and Poly allocates the RFCOMM
+# channel dynamically (observed 14 and 15 on consecutive connections), so the channel itself is
+# resolved from SDP at connect time rather than being matched on.
+[[match]]
+transport = "bluetooth"
+uuid = "82972387-294e-4d62-97b5-2668aa35f618"
+status = "family"
+
+# The BT700 dongle and USB-cabled headsets. Plantronics/Poly vendor id.
+[[match]]
+transport = "hid"
+vendor_id = "047f"
+status = "family"
+
+# Exercised over USB on 2026-08-10: every tab of a Voyager 4310 configured through a BT700, and
+# the headset's own USB path reached over its charging stand.
+[[match]]
+transport = "hid"
+vendor_id = "047f"
+name_glob = "*BT700*"
+status = "verified"
+
+[[match]]
+transport = "hid"
+vendor_id = "047f"
+name_glob = "*Voyager 4310*"
+status = "verified"
+
+[[match]]
+transport = "bluetooth"
+name_glob = "Poly V4310*"
+status = "verified"
+
+[[match]]
+transport = "bluetooth"
+name_glob = "*Voyager 4310*"
+status = "verified"
+
+# Poly's per-device settings catalogues carry the message ids and payload types this module needs.
+# They exist only inside Poly's own software and are Poly's property, so they are unpacked from
+# the user's copy rather than shipped. See docs/POLY_UI_BEHAVIOUR.md §11.
+[vendor_assets]
+provider = "extract_installer"
+required = true
+source_page = "https://www.poly.com/us/en/support/downloads-apps/lens-desktop"

@@ -1,0 +1,60 @@
+id = "dell_monitors"
+name = "Dell Monitors"
+category = "display"
+description = "DDC/CI control for Dell displays"
+implementation = "hardware_ui.modules.dell_monitors.device:DellMonitor"
+
+# The EDID vendor id is the real matcher, exactly as the service UUID is for Sony: it is three
+# bytes the panel cannot be renamed out of, and some models publish no name descriptor at all.
+# The value tables below are reverse-engineered from Dell's own software and are wrong for other
+# vendors, so this module deliberately claims Dell and nothing else.
+[[match]]
+transport = "display"
+status = "family"
+properties = { edid_vendor = "DEL" }
+
+# Nine models someone has actually exercised. Name globs only ever upgrade the badge.
+[[match]]
+transport = "display"
+name_glob = "DELL P2425D"
+status = "verified"
+
+[[match]]
+transport = "display"
+name_glob = "DELL P2425H"
+status = "verified"
+
+[[match]]
+transport = "display"
+name_glob = "DELL P2222H"
+status = "verified"
+
+[[match]]
+transport = "display"
+name_glob = "DELL P2422H"
+status = "verified"
+
+[[match]]
+transport = "display"
+name_glob = "DELL U2412M"
+status = "verified"
+
+[[match]]
+transport = "display"
+name_glob = "DELL P2319H"
+status = "verified"
+
+[[match]]
+transport = "display"
+name_glob = "DELL P2317H"
+status = "verified"
+
+[[match]]
+transport = "display"
+name_glob = "DELL P3424WE"
+status = "verified"
+
+[[match]]
+transport = "display"
+name_glob = "DELL P2725HE"
+status = "verified"

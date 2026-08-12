@@ -1,0 +1,55 @@
+id = "logitech_peripherals"
+name = "Logitech Peripherals"
+category = "input"
+description = "Logitech mice, keyboards and Unifying/Bolt receivers over HID++"
+implementation = "hardware_ui.modules.logitech_peripherals.device:LogitechDevice"
+
+# This module can report devices enumeration cannot see: a mouse or keyboard paired to a receiver
+# has no hidraw node of its own unless hid-logitech-dj binds, and for a Logi Bolt receiver no
+# kernel version does. The expander asks the kernel first, per slot, and only fills in the gaps.
+# See children.py, and docs/LOGITECH_UI_BEHAVIOUR.md.
+expands = true
+
+# Logitech's USB vendor id. Vendor id alone, deliberately: HID++ is answered on a vendor-defined
+# usage page, and matching on that would mean parsing every candidate's report descriptor during
+# enumeration -- which is the transport's job at connect time, not discovery's. A Logitech node
+# that does not speak HID++ fails to open with a clear message, which beats being invisible.
+#
+# `hid-logitech-dj` gives every device paired to a receiver its own hidraw node, so a mouse and a
+# keyboard behind one receiver arrive here as two devices, each with its own category and icon.
+[[match]]
+transport = "hid"
+vendor_id = "046d"
+status = "family"
+
+# Verified 2026-08-11: a Logi Bolt receiver with an MX Master 3S and an MX KEYS S paired to it.
+# Receiver slots read, both peripherals resolved through children.py, the mouse's nine controls
+# read *and written* (the user changed scroll-wheel settings through the application). The Bolt is
+# the harder case of the two: no kernel driver claims c548, so its paired devices have no node and
+# reach the sidebar only through the expander.
+[[match]]
+transport = "hid"
+vendor_id = "046d"
+product_id = "c548"
+status = "verified"          # Logi Bolt receiver
+
+# Peripherals paired to a receiver have no product id of their own -- they are reached by slot --
+# so they are named. Both verified 2026-08-11 by the user changing settings through the
+# application: per-key button remapping written and reverted on the mouse, and several settings
+# exercised on both. A device *not* named here stays "family" even behind a verified receiver,
+# which is the point: the receiver being tested says nothing about a peripheral nobody has tried.
+[[match]]
+transport = "hid"
+vendor_id = "046d"
+name_glob = "*MX Master 3S*"
+status = "verified"
+
+[[match]]
+transport = "hid"
+vendor_id = "046d"
+name_glob = "*MX Keys S*"
+status = "verified"
+
+# The protocol, the per-model feature tables and every setting definition come from Solaar,
+# vendored under hardware_ui/third_party. Nothing is downloaded at runtime and there is no vendor
+# data to import -- see tools/vendor_solaar.py.

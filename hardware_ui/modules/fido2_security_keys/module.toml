@@ -1,0 +1,24 @@
+id = "fido2_security_keys"
+name = "Security Keys"
+category = "security_keys"
+description = "FIDO2 / U2F / WebAuthn authenticators, over the CTAP standard"
+implementation = "hardware_ui.modules.fido2_security_keys.device:Fido2SecurityKey"
+
+# HID usage page 0xF1D0 is the FIDO alliance's, and every CTAP authenticator advertises it. That
+# is the whole match rule on purpose: no vendor id, no product id, no name. A key from any maker
+# is claimed, which is what makes this a base module rather than a YubiKey module.
+#
+# A vendor module adds `extends = "fido2_security_keys"` and its own rule; the registry then
+# claims the device with the most specialised module, so the key still appears exactly once.
+[[match]]
+transport = "hid"
+properties = { hid_usage_page = "f1d0" }
+status = "family"
+
+# Keys someone has actually exercised this against.
+[[match]]
+transport = "hid"
+vendor_id = "1050"
+name_glob = "*YubiKey*"
+properties = { hid_usage_page = "f1d0" }
+status = "verified"

@@ -1,0 +1,52 @@
+id = "jabra_headsets"
+name = "Jabra Headsets"
+category = "audio"
+description = "Jabra headset and adapter configuration over GN Audio's GNP protocol"
+implementation = "hardware_ui.modules.jabra_headsets.device:JabraHeadsetDevice"
+
+# GN Netcom / GN Audio's USB vendor id. Vendor id alone is the right rule here, deliberately:
+# the GNP tunnel is a vendor-defined HID usage page (0xFF00/0x01) and matching on it would mean
+# parsing every candidate's report descriptor during enumeration, which is the transport's job at
+# connect time, not discovery's. A Jabra HID node without the tunnel simply fails to open with a
+# clear message, which is better than being invisible.
+[[match]]
+transport = "hid"
+vendor_id = "0b0e"
+status = "family"
+
+# Exercised through this shell on 2026-08-11 against a Link 390 with an Evolve2 85 behind it:
+# endpoint discovery at 0x01 and 0x04, a 68-property probe, the capability cache warm and cold,
+# reads and writes with settled-read verification, the equalizer read and written, the adapter's
+# own 32 settings, battery, and the learned-limits cache surviving a reconnect.
+[[match]]
+transport = "hid"
+vendor_id = "0b0e"
+name_glob = "*Link 390*"
+status = "verified"
+
+# The charging stand is its own GNP device (0xC0DF), not a passthrough to the headset: opened
+# directly it answers for itself with 9 properties and 32-byte reports, which is what exercised
+# the packet reassembly. Configuring the headset through it is not possible and never was.
+[[match]]
+transport = "hid"
+vendor_id = "0b0e"
+name_glob = "*Evolve2 85 Deskstand*"
+status = "verified"
+
+# The headset's own USB node, for a model cabled directly rather than reached through a dongle or
+# a stand. Untested: this Evolve2 85 was configured over the air through the Link 390, so its
+# cabled interface has never been opened.
+[[match]]
+transport = "hid"
+vendor_id = "0b0e"
+name_glob = "*Evolve2 85*"
+status = "family"
+
+# GN Audio's property catalogue carries the command, subcommand and byte converters for all 423
+# properties. It is published on npm under an ISC declaration but ships no licence text, so it is
+# fetched from GN Audio's own publication on consent rather than redistributed. Required: without
+# it a Jabra device can be identified and nothing else. See assets.py.
+[vendor_assets]
+provider = "registry_fetch"
+required = true
+source_page = "https://www.npmjs.com/package/@gnaudio/jabra-properties-definition"

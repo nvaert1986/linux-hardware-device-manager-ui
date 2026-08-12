@@ -1,0 +1,22 @@
+[Desktop Entry]
+Type=Application
+Name=Linux Hardware Device Manager UI
+GenericName=Device Configuration
+X-GNOME-FullName=Linux Hardware Device Manager UI (LHDMUI)
+Comment=Configure USB, Bluetooth and DDC/CI devices
+# The installed form. To run from a source tree instead, copy this file to
+# ~/.local/share/applications/ and point Exec at that checkout's run.sh -- do not
+# commit such a path here, since it is one developer's home directory and breaks
+# for everyone else.
+Exec=hardware-ui
+# A theme icon name, resolved from hicolor once the package installs
+# hardware_ui/shell/icon/hardware-ui.svg into the icon theme. An absolute path also
+# works and skips theme lookup, but only for the machine it was written on.
+Icon=hardware-ui
+Terminal=false
+Categories=Settings;HardwareSettings;Qt;
+Keywords=headset;headphones;monitor;display;controller;bluetooth;usb;peripheral;
+# Must match QGuiApplication.setDesktopFileName(). Without this file the portal logs
+# "App info not found for 'hardware-ui'" and the compositor cannot associate the window with
+# its icon, so the taskbar falls back to a generic placeholder.
+StartupWMClass=hardware-ui

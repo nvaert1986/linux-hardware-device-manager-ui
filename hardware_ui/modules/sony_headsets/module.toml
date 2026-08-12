@@ -1,0 +1,48 @@
+## Sony MDR module manifest.
+##
+## Read at startup for matching. The implementation below is NOT imported until the user opens a
+## matching device -- that deferral is what keeps startup in the tens of milliseconds.
+
+id = "sony_headsets"
+name = "Sony Headsets"
+category = "audio"
+description = "WH-1000X series over the MDR protocol (Bluetooth Classic RFCOMM)"
+implementation = "hardware_ui.modules.sony_headsets.device:SonyDevice"
+
+## The Sony SDP service UUID is the strongest signal available: it is published by every MDR
+## device and by nothing else, so it matches future models we have never heard of. The RFCOMM
+## channel is deliberately absent -- it is dynamic and must be resolved by SDP query at connect
+## time, never hardcoded.
+[[match]]
+transport = "bluetooth"
+uuid = "96cc203e-5068-46ad-b32d-e316f5e069ba"
+status = "family"
+
+## Hardware physically tested against this module.
+[[match]]
+transport = "bluetooth"
+name_glob = "WH-1000XM3"
+status = "verified"
+
+[[match]]
+transport = "bluetooth"
+name_glob = "WH-1000XM4"
+status = "verified"
+
+## Broad family net for the rest of the WH/WF line. One protocol covers both tested models, so
+## the same framing very probably applies -- but nobody has confirmed it, hence "family". The
+## shell badges these once, and capability discovery means unsupported settings simply do not
+## appear rather than appearing broken.
+[[match]]
+transport = "bluetooth"
+name_glob = "WH-1000XM*"
+status = "family"
+
+[[match]]
+transport = "bluetooth"
+name_glob = "WF-1000XM*"
+status = "family"
+
+## No vendor_assets section: the MDR command set was reverse-engineered from observed traffic and
+## is documented in docs/SONY_MDR_PROTOCOL.md. Nothing needs downloading, and nothing
+## vendor-owned ships here.

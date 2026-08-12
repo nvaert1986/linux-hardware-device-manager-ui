@@ -1,0 +1,25 @@
+id = "yubikeys"
+name = "YubiKeys"
+category = "security_keys"
+description = "YubiKey model, firmware, serial and application state, on top of the CTAP standard"
+implementation = "hardware_ui.modules.yubikeys.device:YubiKey"
+
+# Everything CTAP is inherited. This module only adds what the standard cannot express: which
+# YubiKey this is, what firmware it runs, and which of its applications are switched on over
+# which transport. See docs/YUBIKEY_UI_BEHAVIOUR.md.
+extends = "fido2_security_keys"
+
+# Vendor id alone -- deliberately NOT vendor id plus the FIDO usage page, which is what the base
+# module matches on.
+#
+# The tempting rule is the specific one, and it is a trap: switching FIDO off over USB is an
+# operation this module is meant to offer, and a usage-page rule would take the key out of the
+# application the moment it succeeded, carrying the control needed to undo it. A setting must not
+# be able to hide its own undo.
+#
+# The cost is that the inherited CTAP half becomes conditional: this module has to cope with a key
+# that has no CTAP interface at all, rather than assuming one.
+[[match]]
+transport = "hid"
+vendor_id = "1050"
+status = "verified"
