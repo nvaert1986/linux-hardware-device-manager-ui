@@ -277,7 +277,16 @@ def _fit(renderer, area: QRect) -> QRect:
 
 
 def caption_label(diagram: Diagram) -> QWidget:
-    """The line under a drawing, or an empty widget when there is nothing to say."""
+    """The line under a drawing. The caller adds it to a layout, which is what shows it.
+
+    **Nothing here calls setVisible.** It used to, to hide itself when there was no caption, and
+    that was a real bug rather than a tidy default: a widget with no parent *is* a top-level window,
+    so `setVisible(True)` on one opens a stray window on the desktop. It closed again a moment later
+    when the caller reparented it into a layout, so it read as a flicker rather than as a window --
+    which is exactly why it survived review.
+
+    The callers already skip this when there is no caption, so there was never anything to hide.
+    """
     holder = QWidget()
     box = QVBoxLayout(holder)
     box.setContentsMargins(0, 0, 0, 8)
@@ -285,7 +294,6 @@ def caption_label(diagram: Diagram) -> QWidget:
     label.setWordWrap(True)
     label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
     box.addWidget(label)
-    holder.setVisible(bool(diagram.caption))
     return holder
 
 

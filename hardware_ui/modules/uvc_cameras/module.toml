@@ -1,0 +1,42 @@
+id = "uvc_cameras"
+name = "Cameras"
+category = "cameras"
+description = "Webcam and camera settings over V4L2, plus vendor extras where the model publishes them"
+implementation = "hardware_ui.modules.uvc_cameras.device:UvcCamera"
+
+# **Every V4L2 capture device, and deliberately so.** This is the opposite of the 8BitDo module's
+# single product id, and for the opposite reason: there is no protocol to guess at. UVC is a class
+# specification, the driver reports which controls a camera has, their ranges, defaults and menu
+# items, and this module asks. A camera nobody has seen produces a correct page or a shorter one --
+# never a confident page of wrong offsets.
+#
+# Vendor extras are additive on top, gated twice over (the unit's GUID must be in the camera's own
+# descriptors, and the selector must answer) and sometimes a third time on product id. See
+# protocol/extensions.py.
+#
+# `status = "family"` is therefore the honest default for every camera: the standard controls are as
+# reliable as the kernel's UVC driver, but "this model has been driven through this page" is a
+# different claim and only one model can make it.
+[[match]]
+transport = "v4l2"
+status = "family"
+
+# The Logitech BRIO: read and written through this module, including both of its vendor controls --
+# field of view on extension unit 10 and the status light on unit 11.
+[[match]]
+transport = "v4l2"
+vendor_id = "046d"
+product_id = "085e"
+status = "verified"
+
+# A Realtek "Integrated_Webcam_FHD", the built-in camera in a Dell laptop. No extension units at all,
+# so it is the plain-UVC case: the whole page comes from what the driver reports, which is the claim
+# this module makes for every camera nobody has tried. Verified 2026-08-18 by the user.
+#
+# Worth having a second verified camera precisely *because* it has no vendor extras. The BRIO alone
+# could not tell us whether the standard half stands on its own.
+[[match]]
+transport = "v4l2"
+vendor_id = "0bda"
+product_id = "5570"
+status = "verified"

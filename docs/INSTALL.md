@@ -26,12 +26,16 @@ the same table with what happens when each is missing.
 | *(none)* | **Logitech needs no Solaar install.** The library is vendored under `hardware_ui/third_party`, so `app-misc/solaar` is *not* a dependency and its GTK stack is never pulled in. It needs `pyudev` and `pyyaml`, both above. See `docs/LOGITECH_UI_BEHAVIOUR.md` §1. |
 | `dev-python/fido2` | **required for FIDO2 security keys.** Yubico's pure-Python CTAP2 library; no compiler, no `libfido2` bindings. |
 | `app-crypt/yubikey-manager` | **required for everything a YubiKey does beyond the FIDO2 standard.** Enabling and disabling the USB and NFC **interfaces**, the application list, the **OTP slots**, **OATH accounts**, the model name, firmware version and serial number all come from it — none of that is expressible in CTAP, so none of it is reachable without this package. Absent, the key falls back to what the standard reports (passkeys, PIN, reset) and the page says so on a single row instead of showing dead controls. So: optional in that a YubiKey still *works*, required in that the YubiKey-specific half of the page is otherwise empty. Needs nothing else — the management application is read over the FIDO interface already open, so no `pcscd` and no smartcard stack. |
+| *(none)* | **Cameras need no package at all.** `uvc_cameras` issues its V4L2 and UVC ioctls through `ctypes` and `fcntl`, so there is no `v4l-utils`, no `libusb` and no binding to install — only membership of the `video` group, below. `media-video/v4l-utils` is worth having anyway for `v4l2-ctl` and `qv4l2` when cross-checking, but this application never calls them. |
 | `dev-python/pytest` | the test suite |
-| `dev-python/pyudev` | **hotplug for USB, HID and DRM, *and* required for Logitech devices.** Two unrelated uses of one package: hotplug installs a kernel-side filter so unrelated events never reach the application, and the vendored Logitech library enumerates receivers through it. Absent, hotplug degrades to Rescan and nothing else changes — **but Logitech devices cannot be opened at all**. Bluetooth hotplug is BlueZ over D-Bus and does not come from here. |
+| `dev-python/pyudev` | **hotplug for USB, HID, DRM and cameras, *and* required for Logitech devices.** Two unrelated uses of one package: hotplug installs a kernel-side filter so unrelated events never reach the application, and the vendored Logitech library enumerates receivers through it. Absent, hotplug degrades to Rescan and nothing else changes — **but Logitech devices cannot be opened at all**. Bluetooth hotplug is BlueZ over D-Bus and does not come from here. |
 | `dev-python/pyyaml` | **required for Logitech devices.** How per-device settings are persisted and re-applied: most HID++ settings do not survive a reconnect in hardware, so the host writes them back. Used by no other module. |
 | `dev-python/pybluez` | **optional, Sony only.** One of several ways to resolve the headset's RFCOMM channel; without it the lookup falls back to `sdptool` and then to a cached or default channel. Imported inside the function that uses it, so its absence costs nothing. |
-| `dev-python/dbus-python` | **optional.** Sony reads battery level and active codec from BlueZ through it; without it those two show as unknown and everything else works. OpenRazer pulls it in as its own dependency, so a Razer install already has it. |
+| `dev-python/dbus-python` | **optional for Sony, required for the 8BitDo Bluetooth path.** Sony reads battery level and active codec from BlueZ through it; without it those two show as unknown and everything else works. 8BitDo's configuration radio is reached over BlueZ the same way, so its Bluetooth path needs it — the USB path does not. OpenRazer pulls it in as its own dependency, so a Razer install already has it. |
+| `dev-python/pyusb` | **required for 8BitDo controllers and Creative cards.** Both speak a vendor protocol tunnelled through USB, which means *claiming an interface* rather than opening a device node — the one thing no kernel node exposes. Needs the udev rule under **Device permissions** below. Absent, the devices are still listed and Connect names the missing package. |
+| `dev-python/cryptography` | **required for Creative cards, and not optional in any useful sense.** The card discards every command until an AES-256-GCM handshake unlocks it, so without this the module can enumerate the card and do nothing else. |
 | `app-arch/msitools` | unpacking vendor MSIs for `ExtractInstaller`; `app-arch/7zip` is the fallback |
+| `media-video/v4l-utils` | **optional, and used by nothing here.** `v4l2-ctl` and `qv4l2` are useful for cross-checking what the camera page reports, and `qv4l2` will show you a preview, which this application deliberately does not. |
 | `dev-python/hatchling` | building a wheel |
 
 ```
@@ -40,8 +44,15 @@ emerge -av app-misc/ddcutil                        # monitors
 emerge -av sys-apps/openrazer-daemon               # Razer keyboards and mice
 emerge -av dev-python/fido2                        # FIDO2 / U2F security keys
 emerge -av app-crypt/yubikey-manager               # YubiKey interfaces, OTP, OATH, model info
+emerge -av dev-python/pyusb                        # 8BitDo controllers, Creative cards
+emerge -av dev-python/cryptography                 # Creative cards (the unlock handshake)
+emerge -av dev-python/dbus-python                  # 8BitDo over Bluetooth; Sony battery/codec
 emerge -av dev-python/pytest app-arch/msitools     # optional
+emerge -av media-video/v4l-utils                   # optional; cameras need no package
 ```
+
+> **Cameras add no packages at all.** `uvc_cameras` is stdlib-only — `ctypes`, `fcntl`, `errno`, `os`
+> — and a test asserts the module imports nothing outside the standard library and this project.
 
 Notably **not** needed, and deliberately designed around:
 
@@ -153,8 +164,11 @@ the delay outright.
 | Dell docks | `hidraw` | nothing |
 | Razer peripherals | **the OpenRazer daemon**, not the device | `sys-apps/openrazer-daemon`, and your user in **`plugdev`** |
 | Dell monitors | `i2c-dev` (DDC/CI) | the `i2c-dev` module loaded and your user in `i2c` — see below |
+| 8BitDo controllers | a **claimed** USB interface (GIP), or BlueZ | the `2dc8` line above, and `dev-python/pyusb`. Bluetooth additionally needs `dev-python/dbus-python` |
+| Creative cards | a **claimed** USB interface (CDC-ACM) | the `041e` line above, plus `dev-python/pyusb` and `dev-python/cryptography` |
+| Cameras | `/dev/video*` (V4L2 ioctls) | nothing at all — see below |
 
-Two of those are worth spelling out.
+Three of those are worth spelling out.
 
 **Razer is the exception to everything on this page.** This application never opens a Razer device:
 it asks OpenRazer's daemon, which owns the hardware through its own kernel drivers and ships its
@@ -167,6 +181,28 @@ almost always that group membership, and it needs a fresh login to take effect.
 needed. In particular this application does **not** need Solaar's
 `42-logitech-unify-permissions.rules` — the `uaccess` rule above is broader than it, and grants the
 receiver to the seat rather than to a group.
+
+**Cameras need nothing, not even our rules file.** `systemd` already ships
+`/usr/lib/udev/rules.d/70-uaccess.rules` containing `SUBSYSTEM=="video4linux", TAG+="uaccess"`, so a
+camera at your seat is granted to you before this application is involved. Checked on this machine:
+
+```
+$ ls -l /dev/video0
+crw-rw----+ 1 root video 81, 0 /dev/video0        # the trailing + is the ACL
+
+$ getfacl -p /dev/video0
+user::rw-
+user:<you>:rw-                                    # granted by uaccess, not by the group
+group::rw-
+```
+
+Membership of the **`video`** group also works and is the fallback where `uaccess` does not apply —
+a headless machine, a login that is not seat-attached, or a camera on a second seat. If a camera is
+listed but Connect reports a permission error, that group is what to check, and it needs a fresh
+login.
+
+Note that `uvc_cameras` needs **no package** either: it issues its ioctls through `ctypes` and
+`fcntl` directly, so there is nothing to `emerge` for cameras at all.
 
 FIDO2 security keys need read/write on their `hidraw` node; the rule covers a key plugged in at
 your seat, and without it opening one fails with a permission error rather than a missing device.

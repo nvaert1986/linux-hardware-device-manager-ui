@@ -196,10 +196,24 @@ an example for.
 Vendor id alone is often too coarse, and the rules say so: `dell_docks` matches vid `0x413c`
 **and** a name containing "dock", because a Dell keyboard shares that vendor id and is not a dock.
 
-**One deliberate exception: `fido2_security_keys`**, which claims a security key from any maker by
-its FIDO usage page `0xF1D0` and mentions no vendor id at all. That is the point of it — the CTAP
-standard is the same on a YubiKey, a Nitrokey and a SoloKey. A YubiKey still appears **once**,
-because `yubikeys` extends it and the most specialised module wins.
+**Two deliberate exceptions**, and the guard test whitelists them by name so a third cannot be
+added without someone deciding to:
+
+**`fido2_security_keys`** claims a security key from any maker by its FIDO usage page `0xF1D0` and
+mentions no vendor id at all. That is the point of it — the CTAP standard is the same on a YubiKey,
+a Nitrokey and a SoloKey. A YubiKey still appears **once**, because `yubikeys` extends it and the
+most specialised module wins.
+
+**`uvc_cameras`** claims an entire transport: `transport = "v4l2"` with no vendor id. The
+justification is the same in shape and stronger in degree — UVC is a class specification, and the
+kernel's driver reports which controls a camera has, with their ranges, defaults and menu items. A
+webcam nobody has ever seen therefore gets a *correct* page rather than a guessed one, which a
+vendor-gated rule could never do. Per-model tables exist only for the vendor extras layered on top,
+and each of those is gated three ways before it is offered — see
+[UVC_CAMERAS_UI_BEHAVIOUR](UVC_CAMERAS_UI_BEHAVIOUR.md) §2.
+
+The pattern to take from these two: claiming a class is legitimate when the *class itself* tells you
+what the device can do. It is not a licence to claim broadly and guess.
 
 ---
 

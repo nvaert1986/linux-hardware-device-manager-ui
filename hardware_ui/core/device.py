@@ -38,6 +38,14 @@ class Transport(enum.StrEnum):
     DISPLAY = "display"
     """DDC/CI over the I2C bus behind a DRM connector."""
 
+    V4L2 = "v4l2"
+    """A camera, through its ``/dev/videoN`` node.
+
+    Its own transport rather than a flavour of USB, because what identifies the device and what a
+    module opens is the video node: the USB parent supplies only the vendor and product ids. Vendor
+    features ride the same node through the kernel's UVC extension-unit passthrough, so a camera
+    module never touches USB at all."""
+
 
 class Category(enum.StrEnum):
     """Top-level grouping in the sidebar. Keep this list short.
@@ -56,6 +64,12 @@ class Category(enum.StrEnum):
     SECURITY_KEYS = "security_keys"
     """FIDO2 / U2F authenticators and other security tokens."""
 
+    CAMERAS = "cameras"
+    """Webcams and other video capture devices. Named for what people call the things rather than
+    for the standard they speak: a UVC camera, a laptop's built-in sensor and a capture card all
+    belong here, and "CAMERAS" reads better as a heading than "VIDEO" (which sounds like a monitor,
+    already covered by DISPLAY) or "WEBCAMS" (which excludes the built-in one)."""
+
     OTHER = "other"
 
     @property
@@ -66,6 +80,7 @@ class Category(enum.StrEnum):
             Category.INPUT: "input-gaming",
             Category.DOCKS: "preferences-desktop-thunderbolt",
             Category.SECURITY_KEYS: "application-pgp-keys",
+            Category.CAMERAS: "camera-web",
             Category.OTHER: "preferences-desktop-peripherals",
         }[self]
 

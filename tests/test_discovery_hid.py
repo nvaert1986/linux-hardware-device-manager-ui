@@ -341,7 +341,7 @@ def test_it_only_wakes_for_subsystems_that_can_hold_a_device():
     """Filtering is installed in the kernel, so an unrelated uevent never reaches the process."""
     from hardware_ui.core import discovery
 
-    assert set(discovery.HOTPLUG_SUBSYSTEMS) == {"usb", "hidraw", "drm"}
+    assert set(discovery.HOTPLUG_SUBSYSTEMS) == {"usb", "hidraw", "drm", "video4linux"}
 
 
 def test_a_burst_of_events_drains_in_one_go():
@@ -774,3 +774,147 @@ def test_a_device_bluez_has_no_icon_for_falls_back_to_the_name_guess(monkeypatch
         row = discovery._enumerate_bluetooth_cli()[0]
     assert row.icon_name == ""
     assert row.category is Category.INPUT      # from the word "Keyboard"
+
+
+# --------------------------------------------------------------------------- HID++ detection
+#
+# Logitech's vendor id says nothing about whether a node speaks HID++. A BRIO webcam and an MX
+# Master are both 046d over hidraw, and the module that configures mice was claiming the webcam --
+# which then inherited that module's category and drew a gamepad icon in the sidebar.
+#
+# The test Solaar itself applies is the report descriptor: an input report on id 0x10 of six
+# payload bytes, or on 0x11 of nineteen. Its own filter lives in the vendored copy at
+# third_party/hidapi/udev_impl.py, and deliberately does *not* also require usage page 0xFF00 --
+# that check is present but commented out there as too strict.
+
+#: The BRIO's real report descriptor, read from /sys/class/hidraw/hidraw15 on 2026-08-18. Thirty
+#: four bytes: Consumer page, two one-bit media buttons, six bits of padding. No report ids at all,
+#: so there is nothing for HID++ to be carried on.
+BRIO_DESCRIPTOR = bytes.fromhex(
+    "05 0c 09 01 a1 01"        # Usage Page (Consumer), Usage 1, Collection
+    "05 0c 09 01 a1 01"        #   Usage Page (Consumer), Usage 1, Collection
+    "09 ff 09 fe"              #     Usage 0xff, Usage 0xfe
+    "15 00 25 01 75 01 95 02"  #     Logical 0..1, Report Size 1, Report Count 2
+    "81 42"                    #     Input (Data, Var, Abs, Null)
+    "95 01 75 06 81 01"        #     Report Count 1, Report Size 6, Input (Const) -- padding
+    "c0 c0".replace(" ", "")
+)
+
+#: HID++ as Logitech declares it: a short report on 0x10 with six payload bytes and a long one on
+#: 0x11 with nineteen. Both sizes were confirmed by parsing these same bytes with the vendored
+#: `hid_parser`, independently of the walker under test, which read 0x10 as 48 bits and 0x11 as 152.
+HIDPP_DESCRIPTOR = bytes.fromhex(
+    "06 00 ff 09 01 a1 01"     # Usage Page (Vendor 0xff00), Usage 1, Collection
+    "85 10 75 08 95 06"        #   Report ID 0x10, Report Size 8, Report Count 6
+    "15 00 26 ff 00"           #   Logical 0..255
+    "09 01 81 00"              #   Usage 1, Input
+    "09 01 91 00"              #   Usage 1, Output
+    "c0"                       # End Collection
+    "06 00 ff 09 02 a1 01"     # Usage Page (Vendor 0xff00), Usage 2, Collection
+    "85 11 75 08 95 13"        #   Report ID 0x11, Report Size 8, Report Count 19
+    "15 00 26 ff 00"
+    "09 02 81 00"
+    "09 02 91 00"
+    "c0".replace(" ", "")
+)
+
+
+def test_report_descriptor_sizes_match_the_brio_bytes():
+    """Sizes in bits, keyed by report id, with `None` for a descriptor that declares none."""
+    assert discovery._input_report_sizes(BRIO_DESCRIPTOR) == {None: 8}
+
+
+def test_a_webcams_media_buttons_are_not_hidpp(monkeypatch, tmp_path):
+    """The whole point. Two media-button bits must not read as a configurable mouse."""
+    node = tmp_path / "hidraw15"
+    (node / "device").mkdir(parents=True)
+    (node / "device" / "report_descriptor").write_bytes(BRIO_DESCRIPTOR)
+    assert discovery._speaks_hidpp(node) is False
+
+
+def test_hidpp_reports_are_recognised(monkeypatch, tmp_path):
+    """The positive case, which no locally attached device can supply: both report ids at both
+    sizes. Solaar accepts either one alone, so each is also checked on its own."""
+    assert discovery._input_report_sizes(HIDPP_DESCRIPTOR) == {0x10: 48, 0x11: 152}
+
+    node = tmp_path / "hidraw3"
+    (node / "device").mkdir(parents=True)
+    (node / "device" / "report_descriptor").write_bytes(HIDPP_DESCRIPTOR)
+    assert discovery._speaks_hidpp(node) is True
+
+
+def test_a_report_of_the_wrong_size_is_not_hidpp():
+    """Solaar checks the size, not just the id, and so does this: 0x10 exists here but carries
+    seven bytes rather than six, which is some other vendor protocol."""
+    seven = HIDPP_DESCRIPTOR.replace(bytes.fromhex("9506"), bytes.fromhex("9507"))
+    assert discovery._input_report_sizes(seven)[0x10] == 56
+    assert not any(
+        discovery._input_report_sizes(seven).get(rid) == payload * 8
+        for rid, payload in discovery.HIDPP_REPORTS.items()
+        if rid == 0x10
+    )
+
+
+def test_push_and_pop_are_declined_rather_than_guessed():
+    """Push/Pop save and restore the global item state. Modelling them wrongly would corrupt the
+    running report size for everything after, so the walker says it does not know instead."""
+    assert discovery._input_report_sizes(bytes.fromhex("a4") + HIDPP_DESCRIPTOR) is None
+    assert discovery._input_report_sizes(bytes.fromhex("fe")) is None
+
+
+def test_every_node_of_a_device_is_asked_not_just_the_one_shown(tmp_path):
+    """Measured on a Logi Bolt receiver: discovery represents the group by /dev/hidraw1, which
+    declares no report ids at all, while HID++ answers on /dev/hidraw3. Asking only the
+    representative would report a working receiver as not speaking HID++."""
+    members = []
+    for name, descriptor in (("hidraw1", BRIO_DESCRIPTOR), ("hidraw3", HIDPP_DESCRIPTOR)):
+        node = tmp_path / name
+        (node / "device").mkdir(parents=True)
+        (node / "device" / "report_descriptor").write_bytes(descriptor)
+        members.append({"node": node})
+
+    assert discovery._hidpp_family(members) == "yes"
+    assert discovery._hidpp_family(members[:1]) == "no"
+
+
+def test_an_unreadable_descriptor_is_unknown_not_absent(tmp_path):
+    """`""` and `"no"` are different answers. Reporting "nobody could tell" as "definitely not" is
+    how a working receiver would go missing from the sidebar entirely."""
+    node = tmp_path / "hidraw9"
+    node.mkdir()
+    assert discovery._speaks_hidpp(node) is None
+    assert discovery._hidpp_family([{"node": node}]) == ""
+
+
+# --------------------------------------------------------------------------- cameras win
+
+
+def test_a_camera_displaces_its_own_hid_row():
+    """A webcam exposes media buttons on hidraw as well as video nodes, and each enumerator finds
+    it independently. Here the camera wins, against the rule that applies everywhere else, because
+    its row is the one that can be configured -- the hidraw row carries two button bits and no
+    settings at all, and it was being claimed by the Logitech mouse module."""
+    from hardware_ui.core.device import DeviceInfo, Transport
+
+    hid_row = DeviceInfo(uid="hid:brio", name="Logitech BRIO", transport=Transport.HID,
+                         path="/dev/hidraw15",
+                         properties={"usb": "4-4", "nodes": ["/dev/hidraw15"]})
+    camera = DeviceInfo(uid="v4l2:4-4", name="Logitech BRIO", transport=Transport.V4L2,
+                        path="/dev/video4", properties={"sysfs": "/sys/devices/pci0000:00/4-4"})
+    mouse = DeviceInfo(uid="hid:mouse", name="MX Master", transport=Transport.HID,
+                       properties={"usb": "1-2", "nodes": ["/dev/hidraw3"]})
+
+    kept = discovery._one_row_per_device([hid_row, camera, mouse])
+    assert [d.uid for d in kept] == ["v4l2:4-4", "hid:mouse"]
+    # Nothing is lost: the buttons are still reachable from the row that survived.
+    assert kept[0].properties["hid_nodes"] == ["/dev/hidraw15"]
+
+
+def test_a_camera_without_a_hid_row_gains_no_empty_property():
+    """Most cameras have no hidraw node. They should not sprout an empty list for one."""
+    from hardware_ui.core.device import DeviceInfo, Transport
+
+    camera = DeviceInfo(uid="v4l2:2-1", name="Integrated Camera", transport=Transport.V4L2,
+                        path="/dev/video0", properties={"sysfs": "/sys/devices/2-1"})
+    kept = discovery._one_row_per_device([camera])
+    assert "hid_nodes" not in kept[0].properties

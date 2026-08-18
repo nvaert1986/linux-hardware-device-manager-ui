@@ -69,9 +69,11 @@ class Tray:
         self._icon = QSystemTrayIcon(_icon(), window)
         self._icon.setToolTip(QApplication.applicationDisplayName() or "hardware-ui")
 
-        self._menu = QMenu()
+        # Parented to the window. A parentless QMenu is itself a top-level widget, which is one
+        # more thing that can appear on screen without being asked to.
+        self._menu = QMenu(window)
         self._open = QAction("Open", self._menu)
-        self._open.triggered.connect(self.show_window)
+        self._open.triggered.connect(lambda: self.show_window("menu"))
         self._quit = QAction("Quit", self._menu)
         self._quit.triggered.connect(self.quit)
         self._menu.addAction(self._open)
@@ -84,7 +86,15 @@ class Tray:
 
     # ------------------------------------------------------------------ actions
 
-    def show_window(self) -> None:
+    def show_window(self, why: str = "requested") -> None:
+        """Bring the window back.
+
+        **This is the only thing in the application that can re-show a hidden window**, which is
+        why it says so in the log. A report of the window reappearing on its own 30-60 seconds
+        after being closed to the tray can only arrive here, and the log line names which of the
+        two routes did it -- the menu, or an activation from the desktop's tray.
+        """
+        log.debug("showing the window (%s)", why)
         self._window.showNormal()
         self._window.raise_()
         self._window.activateWindow()
@@ -92,12 +102,18 @@ class Tray:
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         # Only a plain click toggles. A right-click is the context menu's, and reacting to it here
         # as well would fight the menu Qt is already opening.
+        #
+        # Logged unconditionally, including the reasons that are ignored. Some desktops emit
+        # activations nobody asked for, and a report of the window coming back by itself cannot be
+        # told apart from a stray click without knowing whether an activation arrived at all.
+        log.debug("tray activated: reason=%s visible=%s minimised=%s",
+                  reason.name, self._window.isVisible(), self._window.isMinimized())
         if reason is not QSystemTrayIcon.ActivationReason.Trigger:
             return
         if self._window.isVisible() and not self._window.isMinimized():
             self._window.hide()
         else:
-            self.show_window()
+            self.show_window("tray activation")
 
     def quit(self) -> None:
         """Really exit.

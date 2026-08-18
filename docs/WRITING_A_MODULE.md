@@ -47,7 +47,8 @@ around it.
 ```toml
 id = "dell_monitors"                    # must equal the directory name
 name = "Dell Monitors"
-category = "display"                    # audio | display | input | other
+category = "display"                    # audio | display | input | docks
+                                        # | security_keys | cameras | other
 description = "DDC/CI control for Dell displays"
 implementation = "hardware_ui.modules.dell_monitors.device:DellMonitor"
 
@@ -77,6 +78,27 @@ property. Claim by maker, never by device class: a rule of `transport = "hid"` a
 your module every mouse, keyboard and dock on the machine, and someone else's hardware would be
 driven by your protocol. A test walks every shipped manifest and enforces this, so an ungated rule
 fails the suite rather than reaching a user.
+
+**The narrow exception, and what earns it.** Two shipped modules do claim a whole class —
+`fido2_security_keys` by the FIDO usage page, and `uvc_cameras` by `transport = "v4l2"` — and both
+are whitelisted by name in `tests/test_capability.py::CLASS_WIDE_MODULES`. What justifies it in both
+cases is that the *class specification itself* reports what the device can do, so an unknown device
+gets a correct page rather than a guessed one: CTAP answers which options a key supports, and V4L2
+answers which controls a camera has, with ranges, defaults and menu items. If your protocol is a
+published class specification with runtime capability discovery, make that argument and add
+yourself to the whitelist. If it is a vendor protocol you happen to reach over a generic transport,
+it is not this case — gate it.
+
+**The `transport` values available** are `hid`, `usb`, `bluetooth`, `ble`, `display` and `v4l2`.
+Adding a seventh means writing an enumerator in `hardware_ui/core/discovery.py`, adding the member
+to `Transport`, and — if devices of that kind appear and disappear — adding its subsystem to
+`HOTPLUG_SUBSYSTEMS`.
+
+Do not rely on the suite to remind you of that last step. The test on `HOTPLUG_SUBSYSTEMS` pins the
+exact set, which makes *changing* it a deliberate act, but nothing fails if you add a transport and
+forget its subsystem — the symptom is a device that appears only after a manual Rescan, and no test
+will tell you. The same is true of `Category`: adding a member is not enough, it needs an icon in
+`Category.icon`, and the icon name has to exist in the Breeze theme.
 
 Be wary of a vendor id being enough on its own. `dell_docks` needs vid `0x413c` **and** a name
 containing "dock", because Dell also makes keyboards.

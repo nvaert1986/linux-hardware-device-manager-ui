@@ -1,16 +1,21 @@
 # Linux Hardware Device Manager UI (LHDMUI)
 
-**Version 0.10.1.** One uniform interface for configuring USB, Bluetooth and DDC/CI hardware on
-Linux.
+**Version 0.10.1.** One uniform interface for configuring USB, Bluetooth, DDC/CI and V4L2 hardware
+on Linux.
 
 The distribution, the Python package and the desktop-entry id stay `hardware-ui`: those are
 identifiers, and they key the config file, the device cache and every module's vendor-asset
 directory. Only the title changed.
 
-Sony headphones, Poly headsets, Jabra headsets and DDC/CI monitors are not really different
-applications. They are all *read and write typed settings on a device that advertises what it
-supports*. This project treats them that way: one shell, one renderer, and per-device modules that
-contribute protocol code and a list of capabilities — never UI.
+Sony headphones, Poly headsets, Jabra headsets, DDC/CI monitors and webcams are not really
+different applications. They are all *read and write typed settings on a device that advertises what
+it supports*. This project treats them that way: one shell, one renderer, and per-device modules
+that contribute protocol code and a list of capabilities — never UI.
+
+A webcam makes the point better than anything else here: UVC is a class specification, so the kernel
+already reports which controls a camera has, with their ranges, defaults and menu items. The camera
+module declares almost nothing and still produces a correct page for a webcam nobody has ever
+tested — which is what the whole architecture is aiming at.
 
 PyQt6 Widgets, so Breeze draws every control and it looks like the rest of your desktop. GPLv3.
 
@@ -25,7 +30,7 @@ own.
 It was not unreviewed, but be precise about what the review was. **Nobody read every line of this
 tree.** The review that did happen was at the level of behaviour and design: decisions were argued
 over rather than accepted, output was checked against what the hardware actually did, bugs found on
-the bench were traced and fixed, and the tree carries 974 tests that run with no hardware attached.
+the bench were traced and fixed, and the tree carries 1027 tests that run with no hardware attached.
 That applies to the code here and doubly to `hardware_ui/third_party/`, 15,590 lines of vendored
 library that is pinned, patched at five named sites and smoke-tested rather than audited. Where the
 reasoning behind something is not obvious from the code it is written down: `PROJECT_STATE.md` and
@@ -46,8 +51,9 @@ the table so it cannot be missed:
 * **Creative Sound Blaster**
 * **8BitDo Xbox wired controllers**
 
-Both are new, both are reverse-engineered rather than built on a documented protocol, and **both
-will contain bugs.** Every session against real hardware so far has found one — including, in the
+All three are new and **will contain bugs.** The first two are reverse-engineered rather than built
+on a documented protocol; the camera module rests on a published class specification, which is a much
+better position, but its vendor extras for makes other than Logitech have never been run here. Every session against real hardware so far has found one — including, in the
 8BitDo case, a save that reported success, read back correctly, and was gone the moment the
 controller was unplugged. They are usable and worth having; they are not settled. If you use them,
 expect to find something, and know what your device was set to before you start.
@@ -64,7 +70,7 @@ experiment.
 |---|---|
 | Capability schema, device model | working, 64 tests |
 | Module manifests, matching, folder scan | working |
-| Discovery (hidraw / BlueZ / DRM+EDID) | working — 27 ms for 20 devices |
+| Discovery (hidraw / BlueZ / DRM+EDID / USB / V4L2) | working — 27 ms for 20 devices |
 | Hotplug | **working** — udev for USB/HID/DRM, BlueZ over QtDBus for Bluetooth; the latter verified on hardware |
 | QWidgets shell | working |
 | **Sony WH-1000X module** | **complete, verified on XM3/XM4 hardware** |
@@ -80,6 +86,7 @@ experiment.
 | **Logitech module** | **complete; verified on a Logi Bolt receiver, MX Master 3S and MX Keys S** — reads and writes, including per-key button remapping. Paired devices get their own sidebar entries even where no kernel driver exposes them. Solaar's library vendored GUI-free; no runtime dependency. **Adds a few seconds to the first scan** — see below. Pairing implemented but unexercised |
 | **Creative module** | **EXPERIMENTAL — expect bugs.** Newest module here, and by some margin the least settled: most of what it does was worked out against one card over a single evening, and every session against real hardware so far has found something. Exercised on a Sound Blaster X4 — the CDC-ACM transport, the AES-256-GCM unlock, feature toggles, output routing, Super X-Fi, the 10-band equaliser with presets, and the card's four stored modes. Other Creative models are untested: the module matches on vendor id alone. Audio Balance is missing. Host-side DSP effects (X-Bass, Dialog Plus) are deliberately not carried — see [CREATIVE_UI_BEHAVIOUR](docs/CREATIVE_UI_BEHAVIOUR.md) §6a, §8 |
 | **8BitDo module** | **EXPERIMENTAL — expect bugs.** Xbox wired controllers only, and every layer of it has had a correction found on hardware, including one that let a save look successful and survive nothing. Exercised over USB on an Ultimate Wired Controller for Xbox — read, remap, save and read-back. Three profiles, 19 remaps including the back paddles, 11 toggles, 8 sliders, written by an explicit Sync button. The BLE config radio sends the same save session but has not been run through this shell, and in config mode every 8BitDo controller advertises under one name, so an unrecognised model gets no drawings and a warning. Original controller artwork, drawn on the page with the controls around it — see [EIGHTBITDO_UI_BEHAVIOUR](docs/EIGHTBITDO_UI_BEHAVIOUR.md) §2, §7 |
+| **Camera module** | **EXPERIMENTAL — expect bugs.** Any V4L2 capture device, and deliberately so: UVC is a class specification, so the driver reports which controls a camera has with ranges, defaults and menu items, and an unknown webcam gets a correct page rather than a guessed one. Verified on two — a Logitech BRIO including both of its extension controls (field of view and the status light, neither reachable with `v4l2-ctl`), and a Realtek integrated webcam with no extension units at all, the plain-UVC case. Every Logitech extension control `cameractrls` implements is here, each shown only when the camera's own unit answers for it; Razer, Dell and AnkerWork extras are carried unverified and marked so. Filed under **CAMERAS**, one row per camera. Pixel format, resolution and frame rate are changeable, but **will not change what a capture application shows** — measured: ffmpeg, VLC and GStreamer each override it. Every other setting takes effect live, including while something streams. No preview, and nothing is saved to the camera — see [UVC_CAMERAS_UI_BEHAVIOUR](docs/UVC_CAMERAS_UI_BEHAVIOUR.md) |
 | ASUS module | not started |
 | Profiles / copy settings between devices | not built — belongs in the shell, not a module |
 | System tray icon | **working** — Open and Quit on right-click, click to toggle. Closing the window keeps it running in the tray; Quit exits. Skipped entirely where the desktop has no tray, so it can never leave the app unquittable |
@@ -152,19 +159,29 @@ Each row is what that one module needs. Miss it and only that family is unavaila
 | `dell_docks` | — | nothing; reads sysfs and Thunderbolt directly | `fwupdmgr` is consulted when present for firmware detail and skipped when not |
 | `eightbitdo_controllers` | `dev-python/pyusb`; `dev-python/dbus-python` for the Bluetooth path | the udev rule in [INSTALL](docs/INSTALL.md). USB is preferred and is the only way to read the configuration checksum, so connect by cable once even if you intend to use Bluetooth | devices are listed but Connect explains which package is missing |
 | `creative_peripherals` | `dev-python/pyusb` and `dev-python/cryptography` | the udev rule in [INSTALL](docs/INSTALL.md) — this is the one module that *claims* a USB interface rather than opening a node. `cryptography` is not optional: the card discards every command until an AES-256-GCM handshake unlocks it | devices are listed but Connect explains which package is missing |
+| `logitech_peripherals` | — (Solaar's library is **vendored**, see `hardware_ui/third_party/`) | read/write on the receiver's `/dev/hidraw*` — the `uaccess` rule in [INSTALL](docs/INSTALL.md). Nothing is downloaded at runtime and there is no vendor data to import | — |
+| `jabra_headsets` | — | read/write on `/dev/hidraw*`, and the vendor property catalogue, fetched on consent from an ISC-licensed npm package. See [JABRA_UI_BEHAVIOUR](docs/JABRA_UI_BEHAVIOUR.md) | without the catalogue the page still builds, with generated names instead of Jabra's own labels |
+| `uvc_cameras` | — (**stdlib only**: `ctypes`, `fcntl`, `errno`, `os`) | membership of the `video` group, which is what normally grants `/dev/video*`. No `ddcutil`, no `libusb`, no `v4l-utils` — the ioctls are issued directly | the camera does not appear at all: without an openable node there is nothing to enumerate |
 
 **Modules claim hardware by vendor, not by device class**, so a Logitech mouse can never land in
 the Razer module: every rule is gated on a vendor id, a service UUID or a vendor-specific property
-such as the EDID vendor code, and a test asserts it for every shipped module. The one deliberate
-exception is `fido2_security_keys`, which claims a security key from *any* maker by its FIDO usage
-page — that is the point of it. A YubiKey still appears once, because `yubikeys` extends it and
-the more specialised module wins.
+such as the EDID vendor code, and a test asserts it for every shipped module.
+
+**Two deliberate exceptions**, both whitelisted by name in that test so a third cannot be added by
+accident:
+
+- `fido2_security_keys` claims a security key from *any* maker by its FIDO usage page — that is the
+  point of it. A YubiKey still appears once, because `yubikeys` extends it and the more specialised
+  module wins.
+- `uvc_cameras` claims *any* V4L2 capture device. UVC is a class specification: the driver reports
+  which controls a camera has, with ranges, defaults and menu items, so an unknown webcam gets a
+  correct page rather than a guessed one. Per-model tables cover only the vendor extras on top.
 
 ### Development
 
 | Package | Why |
 |---|---|
-| `dev-python/pytest` | the test suite — 974 tests, no hardware and no vendor dependency needed |
+| `dev-python/pytest` | the test suite — 1027 tests, no hardware and no vendor dependency needed |
 | `dev-python/pyudev` | **hotplug** — the list updates itself as USB, HID and DRM devices come and go. A thin binding to libudev, which does the work. Without it nothing is lost but the automatic refresh: Rescan behaves exactly as before |
 | `app-arch/msitools`, `app-arch/7zip` | unpacking vendor installers for `ExtractInstaller` |
 | `dev-python/hatchling` | building a wheel |
@@ -203,7 +220,8 @@ hardware_ui/
 │   ├── jabra_headsets/   ported GNP over hidraw, vendor catalogue, learned per-model limits
 │   ├── logitech_peripherals/  HID++ through the vendored library; receivers expand to children
 │   ├── creative_peripherals/  CDC-ACM control channel behind an AES-256-GCM unlock
-│   └── eightbitdo_controllers/  one 532-byte record over USB GIP or a hidden BLE radio
+│   ├── eightbitdo_controllers/  one 532-byte record over USB GIP or a hidden BLE radio
+│   └── uvc_cameras/      every camera through V4L2, vendor extras through UVC extension units
 ├── third_party/          Solaar, vendored GUI-free and reproducibly (see `tools/vendor_solaar.py`)
 └── cli.py                headless diagnostics; imports no Qt
 
@@ -248,6 +266,9 @@ cached, keyed on the device's advertised function list.
 | [DELL_UI_BEHAVIOUR](docs/DELL_UI_BEHAVIOUR.md) | the same for Dell DDC/CI — every VCP opcode, gate and negative result |
 | [POLY_UI_BEHAVIOUR](docs/POLY_UI_BEHAVIOUR.md) | the same for Poly Deckard — link discipline, id namespaces, the vendor-data decision |
 | [RAZER_UI_BEHAVIOUR](docs/RAZER_UI_BEHAVIOUR.md) | the same for Razer via OpenRazer — capability gating, DPI stages, macros, licensing |
+| [JABRA_UI_BEHAVIOUR](docs/JABRA_UI_BEHAVIOUR.md) | the same for Jabra — GNP framing over hidraw, the vendor property catalogue and its licence, learned per-model limits |
+| [LOGITECH_UI_BEHAVIOUR](docs/LOGITECH_UI_BEHAVIOUR.md) | the same for Logitech HID++ — the vendored library, receivers expanding to paired children, why the first scan is slow |
+| [UVC_CAMERAS_UI_BEHAVIOUR](docs/UVC_CAMERAS_UI_BEHAVIOUR.md) | the same for cameras — why one module claims every camera, how vendor extension units are gated three ways, one row per camera despite an infrared sensor, and which applications honour a resolution change (measured: none) |
 | [FIDO2_UI_BEHAVIOUR](docs/FIDO2_UI_BEHAVIOUR.md) | the same for CTAP security keys — PIN handling, gating, and the base-module design |
 | [EIGHTBITDO_UI_BEHAVIOUR](docs/EIGHTBITDO_UI_BEHAVIOUR.md) | the same for 8BitDo — why a save is a session rather than a record, the checksum seed, why BlueZ cannot do the Bluetooth path, and where the artwork came from |
 | [CREATIVE_UI_BEHAVIOUR](docs/CREATIVE_UI_BEHAVIOUR.md) | the same for Creative — the fourth transport, why there are no per-model tables, the unlock, and what is actually verified |
@@ -288,6 +309,7 @@ this table is untested, and the UI badges it as such rather than pretending othe
 | YubiKey 5 NFC | **verified** — information, self-test, PIN change, and listing the passkeys stored on it |
 | Any FIDO2 / U2F key | `family` — claimed by HID usage page 0xF1D0, no vendor id involved |
 | Creative Sound Blaster X4 | **EXPERIMENTAL** — exercised, not settled. Unlock, every read the page makes, and writes to routing, feature toggles, Super X-Fi and its mode, the equaliser and the card's four stored modes. The module is new and every session against it has found a bug; Audio Balance is missing entirely. Treat writes as an experiment |
+| Logitech BRIO webcam (`046d:085e`) | **EXPERIMENTAL** — exercised, not settled. Standard V4L2 controls read and written; field of view and the status light read and written through Logitech's extension units; the camera's own inactive-flag interlock confirmed live in both directions. Any other camera gets the standard controls and no vendor extras it has not been checked for |
 | 8BitDo Ultimate Wired Controller for Xbox | **EXPERIMENTAL** — exercised over USB, not settled. Read, remap, save and read-back, with the save confirmed to survive the cable coming out. Bluetooth sends the same save session but has never been run through this application. The module is new and every layer of it has had a correction found on hardware |
 | Dell P2425H, P2222H, P2422H, U2412M, P2319H, P2317H, P3424WE, P2725HE | verified in the source project |
 | Everything else in these families | `family` — badged as untested in the UI |
@@ -334,6 +356,47 @@ own publication instead, once, after the user is shown what is being downloaded 
 and the module says plainly that without it a Jabra device can be identified but not configured.
 The protocol underneath it was reverse engineered from `GnProtocol.dll`; that part is not theirs to
 credit.
+
+**[cameractrls](https://github.com/soyersoyer/cameractrls)** — LGPL-3.0-or-later, by Gergo
+Koteles. `uvc_cameras` exists because that project had already worked out the two things that are
+not obvious about configuring a camera on Linux. First, that a webcam's *vendor* features are
+reachable through the kernel's own `UVCIOC_CTRL_QUERY` passthrough — no libusb, no claimed
+interface, no detached driver, and settings can be changed while a video call is running. Second,
+how to find the extension unit they live in: search the device's raw USB descriptors in sysfs for
+the unit's GUID and take the byte immediately before it. That one trick is why this module needs no
+per-model table of unit numbers, and it is not something anybody derives from the UVC specification.
+
+The GUIDs, selectors, byte offsets and value tables in `protocol/extensions.py` are that project's
+reverse engineering. They are facts about hardware rather than anybody's expression — a GUID is a
+number a device answers to — and the Logitech ones have been re-verified here against a BRIO. But
+the discovery was theirs, and the Razer, Dell and AnkerWork entries are carried over on trust and
+marked experimental because no such camera has been attached here.
+
+**None of their code is used, and this is not a clean-room implementation either** — the source was
+read in full, deliberately, which is the opposite of clean room. The ioctl numbers and structures
+are the kernel's public interface, written fresh here and then cross-checked against theirs as a
+correctness test; all eight request codes agreed, which is the sort of thing worth checking against
+an implementation that has been driving real cameras for three years. The code around them is ours:
+different structure, different naming, and mapped onto this project's capability schema.
+
+That "no code" claim is checked rather than trusted. Comparing every line of `uvc_cameras` against
+`cameractrls.py`, the two projects share exactly fourteen lines, and every one is a constant from
+`linux/videodev2.h` or `asm-generic/ioctl.h` — `V4L2_CTRL_FLAG_INACTIVE = 0x0010` and its
+neighbours, plus the `_IOC_*SHIFT` arithmetic. Any correct transcription of those headers produces
+them identically, and `videodev2.h` is itself dual-licensed `(GPL-2.0+ WITH Linux-syscall-note) OR
+BSD-3-Clause`.
+
+**And the licences are compatible in this direction regardless**, which is worth saying so none of
+the above has to carry the whole argument: LGPL-3.0-or-later may be conveyed under GPL-3.0, which is
+this project's licence. So even reading those tables as protectable expression, the obligation would
+be attribution and notice — and this section is it.
+
+Two of its conventions are deliberately *not* copied. It lists a camera's every capture node as a
+separate camera; a Logitech BRIO therefore appears twice, once as its colour sensor and once as the
+infrared one Windows Hello uses. Here that is one device with one row. And its answer to camera
+settings being volatile is a background daemon that reapplies them on plug-in — a reasonable answer,
+and a bigger commitment than this module makes. See
+[UVC_CAMERAS_UI_BEHAVIOUR](docs/UVC_CAMERAS_UI_BEHAVIOUR.md).
 
 **[Yubico](https://www.yubico.com/), for `yubikey-manager` and `python-fido2`** — BSD-2-Clause
 and Apache-2.0 respectively. The security-key modules are a user interface over their libraries and

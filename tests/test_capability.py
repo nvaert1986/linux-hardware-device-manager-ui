@@ -517,15 +517,33 @@ def _claim(registry, **kw):
     return registry.claim(DeviceInfo(**kw)).module_id
 
 
-def test_every_shipped_module_is_gated_on_something_vendor_specific():
-    """Except the CTAP base, which is vendor-neutral by design and says so in its manifest.
+#: Modules that claim a whole transport, and may.
+#:
+#: The rule exists to stop a *vendor* module swallowing another maker's hardware -- a Logitech mouse
+#: landing in the Razer module. It does not apply to a module implementing a **class
+#: specification**, where claiming the class is the correct scope and narrowing it to known vendors
+#: would be the bug:
+#:
+#: ``fido2_security_keys``
+#:     CTAP. Claimed by HID usage page 0xF1D0, which is the standard's own identifier.
+#: ``uvc_cameras``
+#:     UVC, through V4L2. The driver reports which controls a camera has, with ranges, defaults and
+#:     menu items, so an unknown camera produces a correct page rather than a guessed one. Vendor
+#:     extras sit behind a GUID lookup and a per-selector probe on top.
+#:
+#: Adding to this list is a decision about scope, not a way past a failing test.
+CLASS_WIDE_MODULES = frozenset({"fido2_security_keys", "uvc_cameras"})
 
-    A rule with no vendor id, no uuid and no vendor-specific property would claim whole classes of
-    other makers' hardware -- a Logitech mouse landing in the Razer module, say.
+
+def test_every_shipped_module_is_gated_on_something_vendor_specific():
+    """Except the modules implementing a class specification -- see :data:`CLASS_WIDE_MODULES`.
+
+    A *vendor* rule with no vendor id, no uuid and no vendor-specific property would claim whole
+    classes of other makers' hardware -- a Logitech mouse landing in the Razer module, say.
     """
     registry = ModuleRegistry.discover()
     for module_id, manifest in registry._manifests.items():
-        if module_id == "fido2_security_keys":
+        if module_id in CLASS_WIDE_MODULES:
             continue
         for rule in manifest.match:
             gated = (

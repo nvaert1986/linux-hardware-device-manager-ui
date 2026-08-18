@@ -16,9 +16,9 @@ different proposition from one that has been read and written, and the status ta
 
 ## 0.10.1
 
-Two new device families, a fourth transport, a system tray icon, controller artwork that is finally
-on screen, and a round of fixes — most of them reported from real use, and the two device families
-now exercised against real hardware. 974 tests, `ruff` clean.
+Three new device families, two new transports, a system tray icon, controller artwork that is
+finally on screen, and a round of fixes — most of them reported from real use, and all three families
+exercised against real hardware. 1027 tests, `ruff` clean.
 
 ### Added
 
@@ -51,6 +51,66 @@ now exercised against real hardware. 974 tests, `ruff` clean.
   there is no such thing as writing a single setting — saving per change meant a full session, a
   kernel-driver detach and a one-second gap in gamepad input for every dropdown touched. While a
   sync runs the whole page is disabled, because the record is assembled from what is on screen.
+- **Camera support, for every camera.** A new `uvc_cameras` module covering any V4L2 capture device:
+  zoom, pan and tilt, focus, exposure, white balance and picture controls, discovered from the camera
+  rather than from a table of models — so a webcam nobody has seen produces a correct page. On top of
+  that, the vendor features a camera publishes in a UVC extension unit, which no general-purpose
+  Linux tool reaches: on a Logitech BRIO that is **field of view** (65°/78°/90°) and the **status
+  light**. Every Logitech extension control `cameractrls` implements is covered — both status light
+  variants, relative pan and tilt, recentre, all eight stored pan/tilt positions, and the focus motor
+  on the old QuickCams — each appearing only when the camera's own extension unit answers for it, so a
+  BRIO shows its two and none of the conference-camera rows. Entries for Razer, Dell and AnkerWork
+  cameras are carried from `cameractrls` and marked experimental, since no such camera has been
+  attached here.
+
+  Cameras get their own sidebar heading, **CAMERAS**. There is no preview window: adjust with
+  `ffplay`, `qv4l2` or any other viewer open beside it and every change shows up live, which is how
+  V4L2 works rather than something arranged here.
+
+  **Resolutions and frame rates, per pixel format.** What a camera can reach depends on the format,
+  and one row for the whole camera hid that — a BRIO that does 4096×2160 in MJPG was reported as
+  1920×1080, because YUYV came first in its list. There is now a row per format with its largest size
+  and the rates available there, plus what the node is set to at this moment. The practical case:
+  the integrated webcam here does 1080p at 30 fps in MJPG and 5 fps in YUYV, which is the whole
+  answer to why a webcam feels slow.
+
+  **And they can be changed**, as three dependent dropdowns: pick a pixel format and the resolution
+  list rebuilds for it, pick a resolution and the frame-rate list follows. Only the camera's own
+  enumerated modes are ever offered, and every write is verified against what the driver actually
+  took — V4L2 lets a driver accept a format and substitute another, so a substitution is reported
+  rather than swallowed.
+
+  Two honest limits, both stated on the controls rather than hidden. Changing the mode fails while
+  the camera is in use — on a PipeWire desktop a single browser tab is enough — and the error names
+  what to close instead of showing an errno; image controls keep working either way.
+
+  And it **will not change what a capture application shows.** Applications ask for their own format
+  when they open a camera and get it. Measured, from a camera set to 1280×720 MJPG at 30 fps:
+  `ffmpeg` left it at 1280×720 YUYV, VLC at 1920×1080 YUYV, GStreamer at 640×480 at 120 fps — three
+  for three, each substituting something different. Kamoso does the same whether or not you restart
+  it, and its own settings offer no resolution at all. A capture written to omit `VIDIOC_S_FMT`
+  received a real 1280×720 frame, which is what shows the setting is genuine device state and not
+  decoration — but no application anybody uses behaves that way.
+
+  So the control changes the camera and changes nothing about what an application displays, and the
+  page says exactly that on the control, because the obvious expectation of a resolution dropdown is
+  the wrong one. **Every other setting is unaffected**: the image controls, field of view and the
+  status light all take effect live, including while something is streaming.
+
+  This reverses an earlier decision to keep them read-only, which rested on a claim that turned out
+  to be wrong: setting a format needs no reopened descriptor and does persist. Ported from
+  `cameractrls`, which exposes the same three controls.
+
+  One module rather than one per brand, because every camera speaks the same protocol and the vendor
+  part is a small annex reached through the same ioctl. Nothing is saved to the camera — UVC controls
+  are volatile — and the page says so rather than implying otherwise.
+
+- **A fifth transport: V4L2 cameras.** One row per physical camera, which takes some doing: a webcam
+  with an infrared sensor for face unlock presents two capture nodes that are identical in USB ids,
+  name and even extension units. They differ in what they can stream, so the node offering more
+  pixel formats wins and the other is remembered rather than shown. `cameractrls` lists both as
+  separate cameras; this does not.
+
 - **A fourth transport: raw USB discovery.** hidraw, Bluetooth and DRM all hand over a device node to
   open; a vendor protocol tunnelled through USB has to have its interface *claimed* instead. Devices
   qualify by matching an explicit list of interface signatures — CDC-ACM for Creative, GIP for
@@ -87,6 +147,19 @@ now exercised against real hardware. 974 tests, `ruff` clean.
   redistribute.
 
 ### Fixed
+
+- **A webcam no longer appears as a gamepad.** A Logitech BRIO was showing up twice — once correctly
+  as a camera, and once as an entry filed under INPUT with a gamepad icon, claimed by the module that
+  configures mice and keyboards. Both rows were the same camera: a webcam is a composite USB device,
+  and the BRIO's HID interface is its two volume-key bits and nothing else. A camera's row now
+  displaces the HID row for the same device, keeping that row's nodes so nothing becomes unreachable.
+
+  Discovery also publishes whether a device actually speaks HID++ now, read from its report
+  descriptor by the same test Solaar applies — an input report on id `0x10` of six bytes or `0x11` of
+  nineteen — asked of every node of the device rather than the one the sidebar shows, because on a
+  Logi Bolt receiver those are different nodes. The Logitech module's match rule is not yet narrowed
+  to require it: that wants a receiver attached to test, and the cost of getting it wrong is a
+  receiver that disappears instead of one that reports a clear error.
 
 - **Logitech devices paired over Bluetooth showed one working row and one dead one.** A mouse
   paired directly appears twice — as a hidraw node, which is the row that opens and carries HID++,
@@ -211,8 +284,14 @@ now exercised against real hardware. 974 tests, `ruff` clean.
   Surround appears: those run on the host as Windows audio processing objects.
 - **8BitDo Ultimate Wired Controller for Xbox** (`2dc8:2002`) over USB — read, remap, save, and
   read-back after the save.
+- **Logitech BRIO** (`046d:085e`) — the standard controls plus both of its Logitech extension
+  controls: field of view on extension unit 10 across all three values, and the status light on
+  unit 11, each written and read back.
+- **Realtek Integrated_Webcam_FHD** (`0bda:5570`) — a built-in laptop camera with no extension units
+  at all. Worth having precisely for that: it is the plain-UVC case, and the BRIO alone could not
+  show whether the standard half stands up without vendor extras.
 
-Both modules match more devices than these, and everything else they match is still marked as an
+These modules match more devices than these, and everything else they match is still marked as an
 untested model. That is what the "untested model" line under a device in the sidebar means.
 
 ### Known limits

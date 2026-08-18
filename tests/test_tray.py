@@ -191,3 +191,48 @@ def test_a_desktop_without_a_tray_is_left_alone(window, monkeypatch, qapp):
     # And closeEvent is untouched, so the window really does close.
     window.close()
     assert not window.isVisible()
+
+
+def test_the_caption_of_a_diagram_is_not_a_window_of_its_own(qapp):
+    """A stray empty window opened on the desktop whenever a diagram page was built.
+
+    `caption_label` called `setVisible(True)` on a widget with no parent, and a parentless widget
+    *is* a top-level window — so Qt opened one. The caller reparented it into a layout a moment
+    later, which closed it again, so it read as a flicker rather than as a window and survived
+    review. The callers already skip the caption when there is none, so there was nothing to hide.
+    """
+    from hardware_ui.core.diagram import Diagram
+    from hardware_ui.shell.diagram import caption_label
+
+    before = set(qapp.topLevelWidgets())
+    holder = caption_label(Diagram(image="none.svg", caption="The controller as it faces you."))
+
+    assert holder.parent() is None, "still parentless — the caller adds it to a layout"
+    assert not holder.isVisible(), "and must not put itself on screen while it is"
+    strays = [w for w in qapp.topLevelWidgets() if w not in before and w.isVisible()]
+    assert not strays, f"opened {len(strays)} window(s) nobody asked for"
+
+
+def test_only_one_thing_can_re_show_a_hidden_window(qapp):
+    """The window reappearing on its own was reported from a colleague's machine.
+
+    Whatever the cause, it has to arrive through `Tray.show_window` — nothing else in the shell
+    re-shows a hidden top-level window. This pins that, so a future change that adds a second route
+    has to notice it is doing so.
+    """
+    import pathlib
+
+    shell = pathlib.Path("hardware_ui/shell")
+    # By file, not by line: a line number pins the formatting rather than the rule.
+    offenders = sorted(
+        path.name
+        for path in shell.glob("*.py")
+        if any(
+            "showNormal()" in line.split("#", 1)[0] or "showFullScreen()" in line.split("#", 1)[0]
+            for line in path.read_text().splitlines()
+        )
+    )
+    assert offenders == ["tray.py"], (
+        f"a new way to re-show the window appeared in {offenders}. If intended, it needs the "
+        "logging tray.show_window has, or a reappearing-window report is unanswerable."
+    )

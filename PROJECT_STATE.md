@@ -1,15 +1,40 @@
-# Project state — 2026-08-07
+# Project state — 2026-08-18
 
 *A development record, not a manual.* It says what is done, what is verified against real hardware
 and what is merely written, and it keeps the reasoning behind decisions that would otherwise look
 arbitrary. For how to install and run the application, see [`README.md`](README.md) and
 [`docs/INSTALL.md`](docs/INSTALL.md); for how a module behaves, the `docs/*_UI_BEHAVIOUR.md` files.
 
-**Linux Hardware Device Manager UI (LHDMUI), version 0.10.** Renamed from the generic "Hardware"
+**Linux Hardware Device Manager UI (LHDMUI), version 0.10.1.** Renamed from the generic "Hardware"
 2026-08-07; the package and desktop-entry id remain `hardware-ui` because they key the config,
 cache and vendor-asset paths.
 
 Where things stand and what to pick up next. Read this first to resume.
+
+**Publication state.** `~/Projects/hardware-ui` is the working tree and is not a git repository;
+`~/Projects/hardware-ui-prd` is the published mirror and holds the git history. `tools/publish.sh`
+mirrors one into the other — it refuses to carry vendor data or personal identifiers, and it runs the
+test suite *from inside the copy* before exiting. Publishing is a copy only: committing and pushing
+are separate, deliberate acts. As of 2026-08-18 the mirror is current and **uncommitted**; the last
+commit is `385d73f` ("0.10.1: Creative and 8BitDo modules, diagrams, tray icon").
+
+**Session of 2026-08-18** — the camera module, and a documentation pass over everything:
+
+- `uvc_cameras` built, verified on two cameras, and given writable streaming-mode controls (see
+  below). A `v4l2` transport, a `CAMERAS` category and `video4linux` hotplug came with it.
+- A Logitech BRIO stopped appearing as a gamepad. Discovery now publishes `hid_hidpp`.
+- Docs: every module is in the README dependency table and the source tree (three were missing);
+  `dev-python/pyusb`, `dev-python/cryptography` and the 8BitDo use of `dev-python/dbus-python` were
+  **absent from `docs/INSTALL.md` entirely** and are now documented; the Jabra and Logitech behaviour
+  specs were missing from the README index; the class-wide-claim exception is now correctly two
+  modules; `docs/WRITING_A_MODULE.md` lists all six transports and all seven categories; a
+  `uvc_cameras` section was added to `docs/PORT_DIVERGENCES.md`; test counts corrected across the
+  tree. Checked mechanically afterwards: no broken relative links in any of the 18 markdown files,
+  and every behaviour doc is linked from the README.
+- One claim was **withdrawn** rather than kept: `docs/WRITING_A_MODULE.md` had said a guard test
+  catches a forgotten `HOTPLUG_SUBSYSTEMS` entry. It does not — it pins the exact set, which makes
+  changing it deliberate but catches no omission. The doc now says so, along with the matching trap
+  that a new `Category` needs an icon that exists in the Breeze theme.
 
 Backup of the pre-Dell tree: `~/Projects/hardware-ui-sony-only-backup-20260806`.
 (Earlier QML backup: `~/Projects/hardware-ui-qml-backup-20260806-153858`.)
@@ -18,12 +43,26 @@ Backup of the pre-Dell tree: `~/Projects/hardware-ui-sony-only-backup-20260806`.
 
 ## Done
 
-| | |
+**12 modules, 6 transports, 7 categories, 1027 tests, `ruff` clean.**
+
+| Module | State |
 |---|---|
-| Core, shell, discovery | working |
+| Core, shell, discovery | working — 6 transports (`usb`, `hid`, `bluetooth`, `ble`, `display`, `v4l2`), hotplug over udev + BlueZ, tray icon |
 | `sony_headsets` | complete, verified on XM3/XM4 |
 | `dell_monitors` | complete, reads and writes verified on 2× P2425D |
-| Tests | 344, `ruff` clean |
+| `poly_headsets` | complete, verified on a Voyager |
+| `razer_peripherals` | complete, verified (via the OpenRazer daemon) |
+| `dell_docks` | complete, read-only, verified on a WD22TB4 |
+| `fido2_security_keys` | complete, verified against a real YubiKey |
+| `yubikeys` | complete, vendor tab verified |
+| `jabra_headsets` | complete, verified on a Link 390 + Evolve2 85 |
+| `logitech_peripherals` | complete, verified on a Bolt receiver + MX Master 3S + MX Keys S |
+| `creative_peripherals` | **experimental**, verified on a Sound Blaster X4 |
+| `eightbitdo_controllers` | **experimental**, verified on an Ultimate Wired Controller for Xbox |
+| `uvc_cameras` | **experimental**, verified on a Logitech BRIO and a Realtek integrated webcam |
+
+Each module's behaviour spec is `docs/<NAME>_UI_BEHAVIOUR.md`; the authority on which devices are
+tested rather than merely matched is the status table in [`README.md`](README.md).
 
 The Dell module is `hardware_ui/modules/dell_monitors/`. Its behaviour spec —
 every VCP opcode, gate and negative result, with an as-built status column — is
@@ -336,8 +375,11 @@ specialised** matching module, so the key still appears exactly **once**.
 - **Vendor gating is now enforced, not just intended.** Every shipped manifest is walked by a test
   asserting each rule carries a vendor id, a service UUID or a vendor-specific property, so a new
   module cannot claim by device class alone — a Logitech mouse landing in the Razer module fails
-  the suite instead of reaching a user. `fido2_security_keys` is the one whitelisted exception;
-  claiming any maker's key by FIDO usage page is the point of it. Documented in
+  the suite instead of reaching a user. Two modules are whitelisted by name:
+  `fido2_security_keys`, because claiming any maker's key by FIDO usage page is the point of it, and
+  `uvc_cameras`, because UVC is a class specification whose driver reports each camera's own
+  controls, ranges and menu items — so an unknown webcam gets a correct page rather than a guessed
+  one. The test whitelist is what stops a third being added without a decision. Documented in
   `docs/ARCHITECTURE.md` (Matching) and `docs/WRITING_A_MODULE.md` (The manifest).
   Worth keeping in mind: **a vendor id alone is often too coarse** — `dell_docks` needs the vendor
   id *and* a name containing "dock", because Dell also makes keyboards.
@@ -578,6 +620,101 @@ Spec: [`docs/EIGHTBITDO_UI_BEHAVIOUR.md`](docs/EIGHTBITDO_UI_BEHAVIOUR.md).
    record, but "very likely" is not evidence — `GUI_TODO.md` §6 in the source sketches a guided
    capture-diff script for adding one.
 
+## Cameras — written and verified on two cameras, 2026-08-18
+
+`hardware_ui/modules/uvc_cameras/`. Spec:
+[`docs/UVC_CAMERAS_UI_BEHAVIOUR.md`](docs/UVC_CAMERAS_UI_BEHAVIOUR.md). Divergences from the source
+that taught it: [`docs/PORT_DIVERGENCES.md`](docs/PORT_DIVERGENCES.md).
+
+**The first module that claims a whole transport.** `transport = "v4l2"` with no vendor id, which
+required adding a member to `Transport`, a fifth enumerator to discovery, `video4linux` to
+`HOTPLUG_SUBSYSTEMS`, a `Category.CAMERAS`, and `uvc_cameras` to the guard test's whitelist. The
+justification is that UVC is a class specification: the kernel's driver reports which controls a
+camera has with ranges, defaults and menu items, so the page is *read from the device* rather than
+declared. Per-model tables cover only vendor extras.
+
+**No source code copied, and stdlib-only.** `cameractrls` is LGPL-3.0-or-later. It was read to
+learn which extension unit GUIDs, selectors, offsets and payload bytes exist — device-interface data
+describing third-party firmware, not its author's expression — and those values were transcribed.
+Verified mechanically rather than claimed: the only source lines the two projects share are kernel
+constants from `linux/videodev2.h` and `asm-generic/ioctl.h`. Note also that LGPL-3.0-or-later may be
+conveyed under GPL-3.0, so the licences are compatible in this direction regardless, and the standing
+obligation is attribution — see README, "Credit where it is owed".
+
+**Licence position re-checked 2026-08-18**, because it is the kind of claim that should not rest on
+an assertion. `app-misc/cameractrls-0.6.10-r1` declares `LICENSE="LGPL-3+"` in its ebuild (the
+sources carry no header and the install ships no LICENSE file, so the ebuild is the authority). A
+line-by-line comparison of `uvc_cameras` against `cameractrls.py` finds exactly **14 shared lines**,
+every one a constant from `linux/videodev2.h` or `asm-generic/ioctl.h` — each confirmed present in
+those headers on this machine — and `videodev2.h` is dual-licensed `(GPL-2.0+ WITH
+Linux-syscall-note) OR BSD-3-Clause`. Note finally that LGPL-3.0-or-later may be conveyed under
+GPL-3.0, so the licences are compatible in this direction whatever view one takes of the value
+tables, and "clean room" was the wrong term for this and has been removed everywhere: the source was
+read in full and deliberately. The module imports `ctypes`, `fcntl`, `errno`, `os`,
+`asyncio`, `dataclasses`, `logging`, `pathlib` and `typing` — nothing third-party, asserted by
+inspection of every import in the package. So cameras add **no** dependency and **no** udev rule:
+`systemd`'s own `70-uaccess.rules` already tags `video4linux`.
+
+### Verified on hardware
+
+- **Logitech BRIO** (`046d:085e`) — standard controls, plus both Logitech extension controls: field
+  of view on unit 10 across all three values, status light on unit 11, each written and read back.
+- **Realtek Integrated_Webcam_FHD** (`0bda:5570`) — a laptop camera with no extension units, which
+  is the point of including it: the plain-UVC case, proving the standard half stands alone.
+- Streaming mode exercised across every pixel format on both, 4096×2160 MJPG and 7.5 fps set and
+  read back, and the `EBUSY` path provoked by streaming from the camera.
+
+### Three findings worth keeping
+
+1. **A camera row displaces the HID row for the same USB device.** A BRIO exposes two media-button
+   bits on hidraw, which `logitech_peripherals` claimed on vendor id alone — so a webcam appeared
+   under INPUT with a gamepad icon. This reverses the rule that holds everywhere else in
+   `_one_row_per_device`, and it is right here because the video row carries every setting and the
+   hidraw row carries none. Discovery also publishes `hid_hidpp` now, from the report descriptor,
+   using Solaar's own test.
+2. **The streaming-mode controls change the camera and change nothing about what applications show.**
+   Measured against `ffmpeg`, VLC and GStreamer: three for three overrode a 1280×720 setting, each
+   substituting a different mode. Only a capture that never calls `VIDIOC_S_FMT` keeps it, and no
+   real application behaves that way. The controls stay, with the measurement stated on the control
+   itself. Whether they are worth having on that basis is an open question, and the *reporting* —
+   which formats exist and what each can do — is the part carrying real value.
+
+   The chain is worth knowing for the next person who asks whether it can be fixed from outside.
+   Kamoso's config holds `deviceObjectId=138`, and PipeWire object 138 is the node
+   `v4l2:/dev/video5` — so it is Kamoso → `pipewiresrc` → the PipeWire daemon → `uvcvideo`.
+   GStreamer itself is a library inside the application's process, with no socket and no bus name,
+   so there is nothing to talk to there. PipeWire *is* a daemon and does carry
+   `default.video.width` / `height` / `rate` (640/480/25, which is suspiciously what Kamoso showed),
+   but those are read at daemon start rather than from the runtime `settings` metadata, and whether
+   they would override this path is untested — camera access goes through the desktop portal, so
+   `pipewiresrc` would not preroll from a terminal to check.
+3. **Two of this module's design decisions were argued from wrong premises and had to be corrected
+   on measurement.** Both are recorded in
+   [`docs/UVC_CAMERAS_UI_BEHAVIOUR.md`](docs/UVC_CAMERAS_UI_BEHAVIOUR.md) §6 rather than quietly
+   fixed, because the corrections are the useful part:
+
+   - The streaming mode was first made **read-only** on the reasoning that setting a format needs
+     the descriptor reopened and exclusive access. Measured: it succeeds on an idle node and
+     *persists* across closing and reopening the descriptor. The real limits are narrower — `EBUSY`
+     while in use, and applications renegotiating — and neither justified withholding the control.
+   - The frame rate was called unreliable because a request for 15 fps came back as 30. That was the
+     driver clamping to an *enumerated* rate, not general unreliability. Offering only enumerated
+     values makes the substitution check an assertion rather than a hope.
+
+   The pattern behind both: a plausible mechanism was accepted without testing it, and the test was
+   cheap. The module's docs now lead with measurements.
+
+### Open
+
+1. **The mechanical pan/tilt half is unexercised**: relative nudges, recentre, the eight stored
+   positions, and the QuickCam focus motor. Payloads are verified against `cameractrls`' constants
+   by a test, which is transcription and not hardware. Needs a PTZ Pro, Group, MeetUp or Rally. The
+   BRIO cannot test them — no motor, and its peripheral unit correctly declines both selectors.
+2. **Razer, Dell and AnkerWork extras are carried unverified** and marked experimental in the UI.
+3. **`logitech_peripherals` still claims by vendor id alone.** `hid_hidpp` exists so the rule can
+   require it, but narrowing it needs a Bolt receiver attached to test the positive case, and the
+   cost of getting it wrong is a receiver that vanishes rather than one reporting a clear error.
+
 ## Settled — kept for the reasoning
 
 **Modules page — built and verified 2026-08-11.** `shell/modules_page.py`, opened from a button
@@ -651,6 +788,54 @@ shutdown, and `shutdown` covers hotplug plus every open device.
 
 ## Open — next session
 
+*Updated 2026-08-18.* The numbered list further down is the older roadmap, kept because the
+reasoning in it is still worth reading; entries struck through are finished.
+
+**Needs hardware nobody here has:**
+
+1. **Creative Audio Balance.** The only feature of the X4 the module does not carry. It is set with
+   the card's own buttons, so it needs the hardware present to capture what those buttons send.
+   Check ALSA first — it may simply be a mixer control — then the `AudioLevel` (35) domain byte.
+2. **Logitech PTZ cameras.** The mechanical half of `uvc_cameras` — relative pan and tilt, recentre
+   and the eight stored positions — plus the QuickCam focus motor, are transcribed from
+   `cameractrls` and verified only against its own constants by a test. That is a transcription
+   guarantee, not a hardware one. A BRIO cannot test them: no motor, and its peripheral unit
+   correctly declines both selectors. Needs a PTZ Pro, Group, MeetUp or Rally.
+3. **Narrowing the Logitech match rule to `hid_hidpp = "yes"`.** Discovery publishes that property
+   now, read from the report descriptor using Solaar's own test — input report `0x10` at six bytes
+   or `0x11` at nineteen, asked of *every* node of the device because on a Bolt receiver the node
+   discovery represents the group with is not the node HID++ answers on. The manifest change is two
+   lines. It is not made yet because the positive case cannot be tested without HID++ hardware
+   attached, and the cost of getting it wrong is a receiver that vanishes from the sidebar rather
+   than one that reports a clear error. Needs a Bolt receiver or an MX device.
+
+**Needs somebody else's log:**
+
+4. **The tray reappearing by itself.** A colleague reports the window coming back 30–60 seconds
+   after being closed to the tray, with a Logitech BRIO selected. `Tray.show_window()` is the only
+   thing in the application that can re-show a hidden window, and it now logs every call with the
+   reason, as does every tray activation including the ones that are ignored. Waiting on
+   `./run.sh -v` output from that machine. Note there is also **no single-instance guard**, so a
+   second launch is a candidate explanation that the log will distinguish.
+
+**A decision, not a task:**
+
+5. **Whether the streaming-mode dropdowns should exist.** Pixel format, resolution and frame rate
+   are writable in `uvc_cameras` and they genuinely change the device — proven by a capture written
+   to omit `VIDIOC_S_FMT`, which received a real 1280×720 frame. But no application anybody uses
+   honours them: `ffmpeg`, VLC and GStreamer each overrode a 1280×720 setting with a different mode
+   of their own, three for three, and Kamoso does the same whether or not it is restarted. The
+   controls carry an advisory saying exactly that. The *reporting* beside them — which formats
+   exist, what each can reach — is the part with real value. Removing the three dropdowns and
+   keeping the reporting is a defensible call and the user's to make.
+
+---
+
+### The older roadmap, kept for its reasoning
+
+Numbered separately from the list above. Some of these are finished — struck through, with the
+argument left intact where it is still the reason something is shaped the way it is.
+
 1. **Profiles / copy-settings / export-import.** Deliberately not in the Dell module: all three
    are the same operation — apply a value set, skip what the target does not support, clamp the
    rest — which generalises to every module and belongs in the shell.
@@ -703,7 +888,8 @@ shutdown, and `shutdown` covers hotplug plus every open device.
    The one decision to get right is the match rule: **vendor id alone, not vendor id + FIDO usage
    page** — disabling FIDO is an operation this module offers, and a usage-page rule would let
    that setting hide its own undo.
-5. **A Jabra module.** **Ported 2026-08-11.** `hardware_ui/modules/jabra_headsets/`, from the
+5. ~~A Jabra module.~~ **DONE — complete and verified on a Link 390 + Evolve2 85.** Ported
+   2026-08-11. `hardware_ui/modules/jabra_headsets/`, from the
    standalone `~/Projects/plasma-jabra-headphone-support`. The protocol, transport, interpreter and
    catalogue layers came across near-verbatim — they encode hardware findings, not design choices,
    and the source project's own protocol tests came with them (53 pass, 18 skip without the
@@ -803,10 +989,14 @@ shutdown, and `shutdown` covers hotplug plus every open device.
    page corrupts either, since both issue HID++ requests on one channel with no arbitration. The
    Jabra module needed a cross-process `flock` for precisely this.
 
-6. **Creative Sound Blaster** — roadmap. Name it **`creative_soundcards`**: the convention is
+6. ~~Creative Sound Blaster~~ **DONE — shipped as `creative_peripherals`, experimental, verified
+   on a Sound Blaster X4.** The naming argument below was not followed: the module covers the
+   card's headphone amplifier and its DSP as well, so `peripherals` was the honest word. Kept for
+   the reasoning. Name it **`creative_soundcards`**: the convention is
    vendor plus device *class*, and "Sound Blaster" is a brand while "audio" is not a class. Leaves
    room for `creative_headsets` and `creative_speakers` without collision.
-7. **A Logitech module via Solaar** — **vendored 2026-08-11, module not written yet.**
+7. ~~A Logitech module via Solaar~~ **DONE — complete and verified on a Bolt receiver, MX Master
+   3S and MX Keys S.** Vendored 2026-08-11.
    `hardware_ui/third_party/` holds a 28-file subset of `logitech_receiver` (GPL-2.0-or-later, with
    `LICENSE`, `COPYRIGHT` and every per-file header), produced by `tools/vendor_solaar.py` — pinned
    release, named patch set that fails loudly if upstream moves, provenance written, and a proof

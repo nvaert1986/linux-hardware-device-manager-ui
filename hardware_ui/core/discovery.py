@@ -15,11 +15,14 @@ on a timer is the thing this design exists to avoid.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import logging
+import os
 import re
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from .device import Category, DeviceInfo, State, Transport
 from .paths import cache_dir, ensure
@@ -131,6 +134,11 @@ def enumerate_hid() -> list[DeviceInfo]:
                     # Set on any interface advertising the FIDO usage page, so a match rule can
                     # claim every CTAP authenticator without naming a single vendor.
                     "hid_usage_page": "f1d0" if any(e["fido"] for e in members) else "",
+                    # Whether any node of this device declares the HID++ input reports. Lets a
+                    # match rule tell a Logitech mouse from a Logitech webcam, both of which carry
+                    # vendor id 046d over hidraw and are otherwise indistinguishable without
+                    # opening them. See `_hidpp_family`.
+                    "hid_hidpp": _hidpp_family(members),
                     # Every node of this device, in case a module needs a specific one: the Poly
                     # Deckard tunnel lives on exactly one of several.
                     "nodes": [f"/dev/{e['node'].name}" for e in members],
@@ -288,6 +296,92 @@ def _descriptor_kind(node: Path) -> str | None:
             depth -= 1
         offset += 1 + size
     return None
+
+
+#: HID++ declares two input reports and nothing else identifies it as reliably: a short one on
+#: report id 0x10 carrying six payload bytes, and a long one on 0x11 carrying nineteen. Taken from
+#: Solaar's own device filter (``third_party/hidapi/udev_impl.py::_match``), including its decision
+#: *not* to also require usage page 0xFF00 -- the comment there marks that check as too strict, and
+#: Solaar ships it disabled.
+HIDPP_REPORTS = {0x10: 6, 0x11: 19}
+
+
+def _input_report_sizes(descriptor: bytes) -> dict[int | None, int] | None:
+    """Report id to total input payload size in bits. ``None`` if the descriptor is not modelled.
+
+    ``None`` keys a descriptor that declares no report id at all, which is most of them.
+
+    Cross-checked against the vendored ``hid_parser`` on every HID descriptor present on the
+    development machine -- fourteen of them, from a Logitech BRIO to a Razer mouse with seven nodes
+    -- and the two agree on every report id and every size. It is also checked against a HID++
+    descriptor both parsers read as short=6 long=19. Three of those fourteen descriptors make
+    ``hid_parser`` raise, where this walker still answers; being the more tolerant of the two is
+    safe here, because the only question asked of the result is whether two specific report ids
+    exist at two specific sizes.
+
+    Bails on constructs it does not model rather than guessing: long items, and Push/Pop, which
+    save and restore the global item state and so would silently corrupt the running report size.
+    """
+    sizes: dict[int | None, int] = {}
+    report_id: int | None = None
+    size = count = 0
+    offset = 0
+    while offset < len(descriptor):
+        prefix = descriptor[offset]
+        if prefix == 0xFE:                      # Long item
+            return None
+        length = prefix & 0x03
+        length = 4 if length == 3 else length
+        tag, kind = prefix >> 4, (prefix >> 2) & 0x03
+        data = (
+            int.from_bytes(descriptor[offset + 1:offset + 1 + length], "little") if length else 0
+        )
+        if kind == 1:                           # Global
+            if tag == 0x7:                      # Report Size
+                size = data
+            elif tag == 0x8:                    # Report ID
+                report_id = data
+            elif tag == 0x9:                    # Report Count
+                count = data
+            elif tag in (0xA, 0xB):             # Push / Pop
+                return None
+        elif kind == 0 and tag == 0x8:          # Main: Input
+            sizes[report_id] = sizes.get(report_id, 0) + size * count
+        offset += 1 + length
+    return sizes
+
+
+def _speaks_hidpp(node: Path) -> bool | None:
+    """Whether this node answers HID++, from its report descriptor. ``None`` if unreadable.
+
+    Reads sysfs; the node is never opened. ``None`` matters and is not folded into ``False`` --
+    "this is not a HID++ device" and "nobody could tell" call for different treatment, and quietly
+    reporting the second as the first is how a working receiver would go missing.
+    """
+    try:
+        descriptor = (node / "device" / "report_descriptor").read_bytes()
+    except OSError:
+        return None
+    sizes = _input_report_sizes(descriptor)
+    if sizes is None:
+        return None
+    return any(sizes.get(rid) == payload * 8 for rid, payload in HIDPP_REPORTS.items())
+
+
+def _hidpp_family(members: Sequence[dict]) -> str:
+    """``"yes"``, ``"no"`` or ``""`` for a group of nodes belonging to one physical device.
+
+    Asked of **every** node, not of the one this group is represented by, because those are
+    routinely not the same node. Measured on a Logi Bolt receiver: the group is represented by
+    /dev/hidraw1, which declares no report ids whatsoever, while HID++ answers on /dev/hidraw3.
+    Testing only the representative would report a working receiver as not speaking HID++.
+
+    ``""`` when no node qualifies but at least one could not be read -- unknown, not absent.
+    """
+    verdicts = [_speaks_hidpp(entry["node"]) for entry in members]
+    if any(v is True for v in verdicts):
+        return "yes"
+    return "" if any(v is None for v in verdicts) else "no"
 
 
 def _dock_kind(name: str) -> str | None:
@@ -685,10 +779,186 @@ def _parse_edid(edid: bytes) -> tuple[str, int, str, str]:
 # --------------------------------------------------------------------------- Aggregate
 
 
+#: Which node a camera's settings are read through, when it publishes more than one.
+#:
+#: A camera with an infrared sensor -- anything supporting Windows Hello -- presents two capture
+#: nodes. On a Logitech BRIO they are indistinguishable by USB ids, by name, and even by extension
+#: unit: both report the same units and writing to either changes the one camera. What separates
+#: them is what they can stream. The colour sensor offers several pixel formats and a long list of
+#: resolutions; the infrared one offers ``GREY`` at a single square size.
+#:
+#: So the richer node wins, and the test is the count. Naming the formats instead would be guessing:
+#: ``GREY`` is a perfectly ordinary format for a monochrome industrial camera that has no second
+#: node to be confused with.
+CAMERA_NODE_GLOB = "/dev/video*"
+
+
+def enumerate_v4l2() -> list[DeviceInfo]:
+    """Cameras, one row per physical device.
+
+    Reads each ``/dev/videoN``'s capability with ``VIDIOC_QUERYCAP`` and keeps the capture ones. The
+    ioctl needs the node opened, which is the one place this module opens anything -- but it opens
+    read-only, performs one ioctl and closes, and does not touch the stream. A camera in use by a
+    video call is enumerated without disturbing it.
+
+    Nothing here imports the camera module: the shapes needed are three fields of one struct, and a
+    module import during discovery is what the lazy-probe rule exists to prevent.
+    """
+    import ctypes
+    import glob
+    from fcntl import ioctl
+
+    class _capability(ctypes.Structure):
+        _fields_ = [
+            ("driver", ctypes.c_char * 16), ("card", ctypes.c_char * 32),
+            ("bus_info", ctypes.c_char * 32), ("version", ctypes.c_uint32),
+            ("capabilities", ctypes.c_uint32), ("device_caps", ctypes.c_uint32),
+            ("reserved", ctypes.c_uint32 * 3),
+        ]
+
+    querycap = 0x80685600           # _IOR('V', 0, v4l2_capability)
+    capture_bit = 0x00000001         # V4L2_CAP_VIDEO_CAPTURE
+
+    found: list[dict[str, Any]] = []
+    for node in sorted(glob.glob(CAMERA_NODE_GLOB), key=_node_number):
+        cap = _capability()
+        try:
+            fd = os.open(node, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError as exc:
+            log.debug("cannot open %s: %s", node, exc)
+            continue
+        try:
+            ioctl(fd, querycap, cap)
+        except OSError as exc:
+            log.debug("%s answers no VIDIOC_QUERYCAP: %s", node, exc)
+            os.close(fd)
+            continue
+        os.close(fd)
+        # device_caps, not capabilities: the latter is what the *driver* can do across all its
+        # nodes, so on a UVC camera it is set for the metadata node too.
+        if not cap.device_caps & capture_bit:
+            continue
+        usb = _v4l2_usb_parent(node)
+        found.append({
+            "node": node,
+            "card": cap.card.decode(errors="replace").strip(),
+            "driver": cap.driver.decode(errors="replace").strip(),
+            "usb": usb,
+            "richness": _v4l2_richness(node),
+        })
+
+    return _one_row_per_camera(found)
+
+
+def _node_number(node: str) -> tuple[int, str]:
+    digits = "".join(ch for ch in node if ch.isdigit())
+    return (int(digits) if digits else 0, node)
+
+
+def _v4l2_richness(node: str) -> int:
+    """How many formats this node offers. The colour sensor of a pair offers more than one.
+
+    Counted with ``VIDIOC_ENUM_FMT`` rather than by looking for ``GREY``, so nothing depends on a
+    format name. One ioctl per format, on a node already known to be a camera.
+    """
+    import ctypes
+    from fcntl import ioctl
+
+    class _fmtdesc(ctypes.Structure):
+        _fields_ = [
+            ("index", ctypes.c_uint32), ("type", ctypes.c_uint32), ("flags", ctypes.c_uint32),
+            ("description", ctypes.c_char * 32), ("pixelformat", ctypes.c_uint32),
+            ("reserved", ctypes.c_uint32 * 4),
+        ]
+
+    request = 0xC0405602            # _IOWR('V', 2, v4l2_fmtdesc)
+    try:
+        fd = os.open(node, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return 0
+    count = 0
+    try:
+        desc = _fmtdesc()
+        desc.type = 1               # V4L2_BUF_TYPE_VIDEO_CAPTURE
+        while count < 32:
+            try:
+                ioctl(fd, request, desc)
+            except OSError:
+                break
+            count += 1
+            desc.index = count
+    finally:
+        os.close(fd)
+    return count
+
+
+def _v4l2_usb_parent(node: str) -> Path | None:
+    """The USB device behind a video node, for its vendor and product ids."""
+    real = Path(os.path.realpath(node))
+    base = Path("/sys/class/video4linux") / real.name
+    for _ in range(6):
+        base = base / ".."
+        candidate = base.resolve()
+        if (candidate / "idVendor").is_file():
+            return candidate
+    return None
+
+
+def _one_row_per_camera(found: list[dict[str, Any]]) -> list[DeviceInfo]:
+    """Collapse a camera's several capture nodes into one row.
+
+    Grouped by USB device, then the node offering the most pixel formats wins -- see
+    :data:`CAMERA_NODE_GLOB`. A camera with no USB parent (a laptop's MIPI sensor, a loopback
+    device) is grouped by its own node, which leaves it alone.
+    """
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for entry in found:
+        usb = entry["usb"]
+        groups.setdefault(str(usb) if usb is not None else entry["node"], []).append(entry)
+
+    out: list[DeviceInfo] = []
+    for members in groups.values():
+        best = max(members, key=lambda e: (e["richness"], -_node_number(e["node"])[0]))
+        usb = best["usb"]
+        vendor = _hex_or_none(usb / "idVendor") if usb is not None else None
+        product = _hex_or_none(usb / "idProduct") if usb is not None else None
+        serial = ""
+        if usb is not None:
+            with contextlib.suppress(OSError):
+                serial = (usb / "serial").read_text().strip()
+        # Keyed on the USB path rather than the node number, so a camera keeps its identity across
+        # a reboot that hands out /dev/video numbers in a different order.
+        stable = str(usb).rsplit("/", 1)[-1] if usb is not None else Path(best["node"]).name
+        out.append(DeviceInfo(
+            uid=f"v4l2:{stable}",
+            name=best["card"] or "Camera",
+            transport=Transport.V4L2,
+            category=Category.OTHER,
+            vendor_id=vendor,
+            product_id=product,
+            serial=serial,
+            path=best["node"],
+            state=State.PRESENT,
+            icon_name="camera-web",
+            properties={
+                "driver": best["driver"],
+                "sysfs": str(usb) if usb is not None else "",
+                # Every capture node this camera has, in case a module wants the infrared one.
+                "nodes": [
+                    entry["node"]
+                    for entry in sorted(members, key=lambda e: _node_number(e["node"]))
+                ],
+                "formats": best["richness"],
+            },
+        ))
+    return out
+
+
 def enumerate_all() -> list[DeviceInfo]:
     """Every transport, in one sweep. Individual backends fail soft."""
     devices: list[DeviceInfo] = []
-    for fn in (enumerate_hid, enumerate_usb, enumerate_bluetooth, enumerate_displays):
+    for fn in (enumerate_hid, enumerate_usb, enumerate_bluetooth, enumerate_displays,
+               enumerate_v4l2):
         try:
             devices.extend(fn())
         except Exception:
@@ -727,7 +997,12 @@ def _one_row_per_device(devices: list[DeviceInfo]) -> list[DeviceInfo]:
     hid_rows = [info for info in devices if info.transport is Transport.HID]
     usb_parents = {str(info.properties.get("usb", "")) for info in hid_rows} - {""}
     addresses = {info.address.upper() for info in hid_rows} - {""}
-    if not usb_parents and not addresses:
+    camera_parents = {
+        Path(str(info.properties.get("sysfs", ""))).name
+        for info in devices
+        if info.transport is Transport.V4L2
+    } - {""}
+    if not usb_parents and not addresses and not camera_parents:
         return devices
 
     def is_duplicate(info: DeviceInfo) -> bool:
@@ -735,14 +1010,38 @@ def _one_row_per_device(devices: list[DeviceInfo]) -> list[DeviceInfo]:
             return Path(info.path).name in usb_parents
         if info.transport in (Transport.BLUETOOTH, Transport.BLE):
             return info.address.upper() in addresses
+        if info.transport is Transport.HID:
+            return str(info.properties.get("usb", "")) in camera_parents
         return False
 
-    return [info for info in devices if not is_duplicate(info)]
+    kept = [info for info in devices if not is_duplicate(info)]
+    return [_with_hid_nodes(info, hid_rows) for info in kept]
+
+
+def _with_hid_nodes(info: DeviceInfo, hid_rows: Sequence[DeviceInfo]) -> DeviceInfo:
+    """A camera row carrying the hidraw nodes of the row it displaced, as ``hid_nodes``.
+
+    Nothing is lost by a camera winning: the buttons are still reachable, they are just no longer a
+    separate entry pretending to be a separate device. A module that wants them asks for this
+    property rather than re-deriving the USB topology.
+    """
+    if info.transport is not Transport.V4L2:
+        return info
+    parent = Path(str(info.properties.get("sysfs", ""))).name
+    nodes = [
+        node
+        for row in hid_rows
+        if parent and str(row.properties.get("usb", "")) == parent
+        for node in row.properties.get("nodes", [])
+    ]
+    if not nodes:
+        return info
+    return dataclasses.replace(info, properties={**info.properties, "hid_nodes": nodes})
 
 
 #: Subsystems worth waking up for. Anything else on the bus is somebody else's business, and the
 #: filter is installed in the kernel, so an unrelated event never reaches this process at all.
-HOTPLUG_SUBSYSTEMS = ("usb", "hidraw", "drm")
+HOTPLUG_SUBSYSTEMS = ("usb", "hidraw", "drm", "video4linux")
 
 HOTPLUG_HINT = (
     "Hotplug needs dev-python/pyudev. Without it the list refreshes when you press Rescan."

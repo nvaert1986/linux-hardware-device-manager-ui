@@ -195,3 +195,78 @@ as decisions, not omissions.
   the round trip.
 - These panels are attached through a Thunderbolt dock on `DPMST` buses. The origin lists docks
   and MST as unsupported; they work here, slower.
+
+---
+
+# `uvc_cameras`
+
+**Not a port in the sense the rest of this file describes.** No source code was copied. The module
+was written against the UVC 1.5 specification and `linux/videodev2.h`; `cameractrls`
+(LGPL-3.0-or-later) was read to learn *which* extension unit GUIDs, selectors, offsets and payload
+bytes exist, and those values were transcribed. They describe Logitech's, Razer's, Dell's and
+AnkerWork's firmware rather than their author's expression — a GUID is a number the device answers
+to.
+
+Checked rather than asserted: the only source lines the two projects share are kernel constants from
+`linux/videodev2.h` and `asm-generic/ioctl.h`, which any correct transcription produces identically.
+And LGPL-3.0-or-later may in any case be conveyed under this project's GPL-3.0, so the licences are
+compatible in this direction and the obligation is attribution — see
+[README](../README.md#credit-where-it-is-owed).
+
+The divergences below are therefore design decisions rather than patches, but they are recorded for
+the same reason: so the difference is deliberate and reviewable.
+
+## Two cameras per camera become one row
+
+`cameractrls` lists every `/dev/video*` node, so a webcam with an infrared sensor for face unlock
+appears twice under the same name, and only one of the two is the camera anybody wants. Discovery
+keeps the node offering the most pixel formats and remembers the other in the row's `nodes`
+property — see [UVC_CAMERAS_UI_BEHAVIOUR](UVC_CAMERAS_UI_BEHAVIOUR.md) §5.
+
+## Vendor controls are gated three ways, not one
+
+`try_xu_control` asks whether a selector answers. That is kept — it is the load-bearing check — but
+it is the *third* gate here, after the extension unit's GUID being present in the USB descriptors
+and after the model filter where the source declares one (`LOGITECH_BRIO_FOV_DEV_MATCH` and
+friends). The order is by cost, so a camera pays only for the checks that can still succeed. §2.
+
+## Vendor ranges are read from the unit, not assumed
+
+A vendor `range` control asks the unit for `GET_MIN` and `GET_MAX` at connect rather than carrying
+bounds in the table. A vendor control reports its own range exactly as a V4L2 control does, and
+hardcoding one would invent a limit the camera never stated.
+
+## Every write is verified, and that is upstream's rule kept
+
+`V4L2FmtCtrls` compares what the driver returned against what was asked and warns on a
+substitution. That behaviour is deliberately preserved for pixel format, resolution and frame rate,
+including the `10 / (fps × 10)` interval convention — which is not cosmetic: 7.5 fps is a real UVC
+rate and `1/7.5` is not expressible in the integer pair the kernel takes.
+
+## Not carried: the preview, the daemon, the PTZ input bridges
+
+A settings page does not need to be a video player (it would pull in SDL and libturbojpeg), a
+background service that reapplies presets is a shell-wide feature rather than a camera one if it is
+ever built, and driving pan/tilt from a SpaceNavigator or a MIDI controller is not configuring a
+camera. §7.
+
+One consequence worth stating, because it is easy to read as a defect: `cameractrls`' resolution
+control *appears* to work where this one seems not to, because its preview is the capturing
+application and renegotiates on change. Its effect on any other application is identical to this
+one's — none. Measured in §6.
+
+## Confirmed on hardware, 2026-08-18
+
+- **Logitech BRIO** (`046d:085e`) — field of view across all three values on extension unit 10,
+  status light on unit 11, both written and read back. Peripheral unit 11 correctly *declines*
+  selectors `0x01` and `0x02`, so the mechanical pan/tilt rows never appear on a camera with no
+  motor.
+- **Realtek Integrated_Webcam_FHD** (`0bda:5570`) — no extension units at all, which is the
+  plain-UVC case: the whole page comes from what the driver reported.
+- Streaming mode exercised across every format on both cameras, 4096×2160 MJPG and 7.5 fps set and
+  read back, and the `EBUSY` path provoked by streaming from the camera. Image controls kept working
+  throughout, which is what the error message claims.
+- **Still unexercised:** the mechanical pan/tilt nudges, recentre and the eight stored positions,
+  and the QuickCam focus motor. Their payloads are verified against `cameractrls`' own constants by
+  a test, which is a transcription guarantee and not a hardware one. They need a PTZ Pro, Group,
+  MeetUp or Rally.
