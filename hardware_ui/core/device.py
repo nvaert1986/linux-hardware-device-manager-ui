@@ -26,6 +26,7 @@ from . import connection
 from . import interaction as interaction_module
 from .capability import Advisory, CapabilitySet, CapabilityValue
 from .connection import ConnectionLabel
+from .diagram import Diagram
 
 
 class Transport(enum.StrEnum):
@@ -81,9 +82,10 @@ class State(enum.StrEnum):
     PRESENT = "present"
     """Enumerated and physically available, not yet opened.
 
-    Correct for USB, hidraw and DRM, where the node exists only while the hardware does. For
-    Bluetooth use :attr:`PAIRED` instead -- BlueZ lists a paired headset whether or not it is
-    switched on, so "enumerated" says nothing about whether it can be opened."""
+    Correct for USB, hidraw and DRM, where the node exists only while the hardware does, and for a
+    Bluetooth device BlueZ reports as connected -- that means switched on and linked to this
+    machine, which is exactly "available, not yet opened". A paired headset that is switched off is
+    :attr:`PAIRED` instead, because being in BlueZ's list says nothing about reachability."""
 
     PAIRED = "paired"
     """Known to BlueZ and paired, but not currently connected.
@@ -93,7 +95,15 @@ class State(enum.StrEnum):
     genuinely is in this enumeration."""
 
     CONNECTING = "connecting"
+
     CONNECTED = "connected"
+    """**This application** has an open session with the device.
+
+    Not "the operating system has a link to it". Enumeration must never set this: it is written by
+    the shell for devices it currently holds open, and it is what the green dot reports. Conflating
+    the two put a green dot on every switched-on Bluetooth headset before anyone had pressed
+    Connect, which is not what the dot means anywhere else in the application."""
+
     FAILED = "failed"
 
 
@@ -172,9 +182,12 @@ class DeviceInfo:
 
         Used to dim unreachable rows and sort them below live ones, so a powered-off headset no
         longer looks identical to one you can configure.
+
+        One rule for every transport. It used to special-case Bluetooth as "state is CONNECTED",
+        which worked only because enumeration was misusing CONNECTED to mean "BlueZ has a link".
+        Encoding reachability where the transport's quirks are already known -- in the enumerator
+        -- lets this stay a single comparison.
         """
-        if self.transport in (Transport.BLUETOOTH, Transport.BLE):
-            return self.state is State.CONNECTED
         return self.state in (State.PRESENT, State.CONNECTED)
 
     @property
@@ -335,6 +348,22 @@ class Device(abc.ABC):
 
         Consulted after every read, so it may change as the device's state does. Cheap and
         synchronous: it must only inspect state already held, never touch the transport.
+        """
+        return {}
+
+    def diagrams(self) -> dict[str, Diagram]:
+        """Drawings of the hardware, keyed by the :attr:`Capability.section` each one covers.
+
+        For settings that name a *place on the device*: "Left paddle", "D-pad Up", "Zone 2". A
+        column of dropdowns is a list of names, and every vendor configurator for a controller, a
+        mouse or a keyboard draws the device instead.
+
+        Data only -- a file path and a table of fractions. The shell owns every decision about
+        how it is drawn, and a section with no diagram renders as an ordinary form, so this is
+        never load-bearing: a module whose drawing is missing, or a desktop without Qt's SVG
+        support, loses the picture and keeps every control.
+
+        Synchronous and cheap for the same reason as :meth:`advisories`. The default has none.
         """
         return {}
 

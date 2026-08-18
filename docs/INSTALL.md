@@ -101,10 +101,12 @@ cp packaging/70-hardware-ui.rules /etc/udev/rules.d/
 udevadm control --reload-rules && udevadm trigger
 ```
 
-which is these two lines:
+which is these four lines:
 
 ```
 SUBSYSTEM=="hidraw", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="041e", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2dc8", MODE="0660", TAG+="uaccess"
 SUBSYSTEM=="i2c-dev", MODE="0660", TAG+="uaccess"
 ```
 
@@ -114,6 +116,18 @@ avoids a setuid binary or a root daemon.
 **That one file is all most modules need.** Written per-vendor instead, this would be a rule per
 product id and a new rule for every device bought; matched on the *node type* it covers every
 vendor at once, including ones with no module yet.
+
+**The two middle lines are the exceptions, and they name vendors on purpose.** Creative devices are
+not opened as a node: their control protocol rides on a CDC-ACM function that has to be *claimed*
+with libusb, and there is no node type to match on. Matching `SUBSYSTEM=="usb"` without narrowing
+it would hand every USB device on the machine to the logged-in session, so the rule is scoped to
+Creative Technology (`041e`). Nothing is detached: on kernels without `cdc_acm` those interfaces
+have no driver bound, and ALSA owns only the audio interfaces either way.
+
+8BitDo (`2dc8`) is the same situation for the same reason — its Xbox controllers speak GIP on a
+vendor-specific interface and expose no hidraw at all. One difference: claiming that interface
+*does* detach `xpad`, which is put back afterwards, so the controller stops acting as a gamepad for
+about a second during a read or a save.
 
 ### One module costs you time rather than a package
 

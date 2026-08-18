@@ -1,0 +1,59 @@
+id = "creative_peripherals"
+name = "Creative Sound Blaster"
+category = "audio"
+description = "Creative sound card and headphone amplifier configuration over the CDC control channel"
+implementation = "hardware_ui.modules.creative_peripherals.device:CreativeDevice"
+
+# Creative Technology's USB vendor id, and nothing narrower. This is a considered rule, not a
+# shortcut: `CTCDC.dll` carries no supported-device list -- the Sound Blaster X4's own product id
+# is absent from the only per-model table in it, which is a display-name lookup -- and its device
+# check reads vendor and product from a struct at runtime. The library talks to whatever it is
+# handed, so the module matches the vendor and lets the device declare its own capabilities.
+#
+# `transport = "usb"` is load-bearing. Discovery has no PCI enumeration at all, so a PCIe card
+# (an AE-5, a Z) cannot be matched even by accident -- and that is correct rather than lucky,
+# because this protocol runs over a CDC-ACM function that a PCIe card does not have. Do not add a
+# PCI rule here without a transport that can reach one.
+# The one model that has been opened, read and written through this application. Listed before the
+# vendor-wide rule so it wins: the shell marks anything matched only by a family rule as an
+# untested model, which is right for every Creative device except this one.
+[[match]]
+transport = "usb"
+vendor_id = "041e"
+product_id = "3278"
+status = "verified"
+
+[[match]]
+transport = "usb"
+vendor_id = "041e"
+status = "family"
+
+# The same device reached through its HID interface. A Sound Blaster X4 has one -- interface 0 is
+# HID, bound to `usbhid` -- and **that is the row the sidebar shows**: one physical device gives one
+# row, and discovery prefers the hidraw row because it carries an openable node, a device kind and
+# an icon. The device implementation opens the CDC channel with libusb either way, so whichever row
+# wins, the same code runs.
+#
+# Which makes the verified rule below load-bearing rather than a duplicate. Marking only the USB
+# rule verified left the X4 labelled "untested model" in the sidebar, because the row being labelled
+# was never the USB one.
+[[match]]
+transport = "hid"
+vendor_id = "041e"
+product_id = "3278"
+status = "verified"
+
+[[match]]
+transport = "hid"
+vendor_id = "041e"
+status = "family"
+
+# **No [vendor_assets] block, deliberately.** It would put "can use vendor data, imported from the
+# manufacturer's own files" on the Modules page, and this module has no importer: `assets.py` does
+# not exist here and the source project's `import_vendor_data.py` was not carried across. A page
+# that describes a capability the code does not have is worse than one that says nothing.
+#
+# What ships is the eleven genre presets in `protocol/catalogue.py`, recovered from a USB capture.
+# `protocol/presets.py` will still merge a `presets.json` placed in the module's vendor directory by
+# hand, and `fetch_photo` will still use a `device.png` found there -- the reading side works. Only
+# the importing side is missing. Restore this block in the same commit that adds one.

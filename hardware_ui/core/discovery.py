@@ -68,7 +68,11 @@ def enumerate_hid() -> list[DeviceInfo]:
 
         name = _tidy_name(fields.get("HID_NAME", node.name))
         usb = _usb_device_of(node)
-        kind = _fido_kind(node) or _dock_kind(name) or _hid_kind(usb)
+        # `_descriptor_kind` last: the USB path is verified against the Razer seven-node
+        # case, so it keeps precedence, and only a node that got nothing -- in practice a
+        # Bluetooth one -- falls through to reading its own descriptor.
+        kind = (_fido_kind(node) or _dock_kind(name) or _hid_kind(usb)
+                or _descriptor_kind(node))
         scanned.append({
             "node": node,
             "name": name,
@@ -238,6 +242,54 @@ def _fido_kind(node: Path) -> str | None:
     return "security_key" if FIDO_USAGE_PAGE in descriptor else None
 
 
+#: Top-level HID usages that say what a device is. Page 1 is Generic Desktop.
+_USAGE_KINDS = {(0x01, 0x02): "mouse", (0x01, 0x06): "keyboard"}
+
+
+def _descriptor_kind(node: Path) -> str | None:
+    """What this device is, read from its own HID report descriptor.
+
+    The fallback for **Bluetooth**. :func:`_hid_kind` classifies by the USB interface's protocol
+    byte, and a Bluetooth HID device has no USB interface at all -- so an MX Master paired directly
+    over Bluetooth got no classification, and therefore no icon and a category guessed from whether
+    its name happened to contain the word "mouse". One did ("Logitech Wireless Mouse MX Master 2S",
+    filed under INPUT) and one did not ("Logitech MX Master 3S", filed under OTHER with the generic
+    peripherals icon), which is not a distinction anybody meant to draw.
+
+    Only top-level usages count -- those outside any collection. A mouse's descriptor opens with
+    Generic Desktop / Mouse and may then declare a vendor page for its private protocol; taking
+    usages from inside collections would pick up pointers, buttons and wheels as well.
+
+    Reads sysfs, like :func:`_fido_kind`; nothing is opened.
+    """
+    try:
+        descriptor = (node / "device" / "report_descriptor").read_bytes()
+    except OSError:
+        return None
+
+    offset = page = 0
+    depth = 0
+    while offset < len(descriptor):
+        prefix = descriptor[offset]
+        size = prefix & 0x03
+        size = 4 if size == 3 else size
+        tag, kind = prefix >> 4, (prefix >> 2) & 0x03
+        data = int.from_bytes(descriptor[offset + 1:offset + 1 + size], "little") if size else 0
+
+        if kind == 1 and tag == 0x0:            # Global: Usage Page
+            page = data
+        elif kind == 2 and tag == 0x0 and depth == 0:   # Local: Usage, outside any collection
+            found = _USAGE_KINDS.get((page, data))
+            if found:
+                return found
+        elif kind == 0 and tag == 0xA:          # Main: Collection
+            depth += 1
+        elif kind == 0 and tag == 0xC:          # Main: End Collection
+            depth -= 1
+        offset += 1 + size
+    return None
+
+
 def _dock_kind(name: str) -> str | None:
     """``dock``/``dock_usb`` when the product calls itself one, else ``None``.
 
@@ -315,6 +367,161 @@ def _tidy_name(name: str) -> str:
     return " ".join(words) or name
 
 
+# --------------------------------------------------------------------------- raw USB
+
+
+SYS_USB = Path("/sys/bus/usb/devices")
+
+#: Interface signatures that make a USB device worth a sidebar row, as ``(class, subclass,
+#: protocol)``. ``None`` matches any value in that position.
+#:
+#: **This list is the filter, and it stays a list of exact signatures rather than a class test.**
+#: Enumerating every USB device would fill the sidebar with hubs, webcams, card readers and every
+#: composite keyboard interface, and the sidebar is the product. Each entry below is a specific
+#: protocol a module actually speaks, so a device qualifying here is a device something can talk
+#: to. Add a signature when a real device needs it, never in anticipation.
+_CONTROL_INTERFACES = (
+    # CDC-ACM: the device presents a serial port and speaks a private protocol over it, which is
+    # what Creative does. Subclass 0x02 specifically -- communications class also covers ethernet,
+    # ATM and OBEX functions, which are somebody else's business.
+    (0x02, 0x02, None),
+    # GIP, the Xbox Game Input Protocol: a vendor-specific interface with a fixed subclass and
+    # protocol. 8BitDo's Xbox controllers expose this and **no hidraw at all**, so without it they
+    # cannot be discovered by any transport here. Matched as the full triple rather than on class
+    # 0xFF alone, because 0xFF is what every dongle in the world falls back to.
+    (0xFF, 0x47, 0xD0),
+)
+
+
+def enumerate_usb() -> list[DeviceInfo]:
+    """Walk ``/sys/bus/usb/devices`` for devices exposing a control interface we can speak to.
+
+    The fourth transport, and the only one that does not correspond to a kernel-provided character
+    device this application can just open. hidraw, BlueZ and DRM all hand over a node; a vendor
+    protocol tunnelled through CDC or GIP has to be claimed with libusb at connect time.
+
+    Which interfaces qualify is :data:`_CONTROL_INTERFACES`, and that list is deliberately a set
+    of exact signatures rather than a class test -- see the note there.
+
+    Nothing is opened. Interface classes come from sysfs attributes, the same way
+    :func:`enumerate_hid` reads report descriptors as files.
+    """
+    if not SYS_USB.is_dir():
+        return []
+
+    found: list[DeviceInfo] = []
+    for entry in sorted(SYS_USB.iterdir()):
+        # Interfaces are named `3-1.2:1.0`; devices are `3-1.2`. Only devices carry idVendor, so
+        # the attribute is the test rather than the name shape.
+        if not (entry / "idVendor").exists():
+            continue
+        control = _control_interfaces(entry)
+        if not control:
+            continue
+
+        try:
+            vendor_id = int(_read_text(entry / "idVendor"), 16)
+            product_id = int(_read_text(entry / "idProduct"), 16)
+        except ValueError:
+            continue
+
+        product = _read_text(entry / "product")
+        manufacturer = _read_text(entry / "manufacturer")
+        name = (_tidy_name(f"{manufacturer} {product}".strip())
+                or f"USB {vendor_id:04x}:{product_id:04x}")
+        serial = _read_text(entry / "serial")
+
+        found.append(DeviceInfo(
+            # The serial when there is one: a sysfs path changes the moment the device moves to
+            # another port, and this uid keys the settings and the capability cache.
+            uid=f"usb:{serial or entry.name}",
+            name=name,
+            transport=Transport.USB,
+            category=_usb_category(entry, name, control),
+            icon_name=_USB_ICONS.get(control[0] if control else "", ""),
+            vendor_id=vendor_id,
+            product_id=product_id,
+            serial=serial,
+            path=str(entry),
+            state=State.PRESENT,
+            properties={
+                "busnum": _read_text(entry / "busnum"),
+                "devnum": _read_text(entry / "devnum"),
+                "interfaces": _usb_interface_count(entry),
+                # Which signature matched, so a module's match rule can ask for the transport it
+                # actually speaks instead of re-reading sysfs. A device may offer more than one.
+                "control_interfaces": ",".join(control),
+            },
+        ))
+    return found
+
+
+#: Sidebar heading per control interface, where the interface says what the device *is*. GIP is
+#: an Xbox input protocol and nothing else uses it, so a GIP device is a game controller; CDC-ACM
+#: says nothing about the device, so those fall through to the audio sniff and then to OTHER.
+_USB_CATEGORIES = {"gip": Category.INPUT}
+_USB_ICONS = {"gip": "input-gaming"}
+
+
+def _usb_category(usb: Path, name: str, control: list[str]) -> Category:
+    for interface in control:
+        if interface in _USB_CATEGORIES:
+            return _USB_CATEGORIES[interface]
+    return Category.AUDIO if _looks_like_audio(usb, name) else Category.OTHER
+
+
+#: Names for the signatures, used as the ``control_interfaces`` property. Kept short and stable:
+#: they are matchable strings in a module manifest, so renaming one breaks a rule somewhere.
+_INTERFACE_NAMES = {(0x02, 0x02, None): "cdc-acm", (0xFF, 0x47, 0xD0): "gip"}
+
+
+def _control_interfaces(usb: Path) -> list[str]:
+    """Names of the control interfaces this device exposes, in :data:`_CONTROL_INTERFACES` order.
+
+    Empty means nothing here can talk to it, which is the common case and the reason the sidebar
+    stays short.
+    """
+    seen: list[tuple[int | None, int | None, int | None]] = []
+    for interface in sorted(usb.glob(f"{usb.name}:*")):
+        # Per attribute, not all-or-nothing: an unreadable one becomes None, which then only
+        # matches a signature that does not care about that position. Losing a whole interface
+        # because one file was missing would silently hide the device.
+        triple = tuple(_hex_or_none(interface / attr) for attr in
+                       ("bInterfaceClass", "bInterfaceSubClass", "bInterfaceProtocol"))
+        if triple[0] is not None:
+            seen.append(triple)  # type: ignore[arg-type]
+
+    matched = []
+    for signature in _CONTROL_INTERFACES:
+        if any(all(want is None or want == got
+                   for want, got in zip(signature, triple, strict=True))
+               for triple in seen):
+            matched.append(_INTERFACE_NAMES[signature])
+    return matched
+
+
+def _hex_or_none(path: Path) -> int | None:
+    try:
+        return int(_read_text(path), 16)
+    except ValueError:
+        return None
+
+
+def _looks_like_audio(usb: Path, name: str) -> bool:
+    """A USB audio class interface, or a name that says so.
+
+    The class is the reliable signal -- a sound card carries interface class 0x01 whatever it is
+    called -- and the name check catches a headphone amplifier that presents only CDC and HID.
+    """
+    for interface in usb.glob(f"{usb.name}:*"):
+        try:
+            if int(_read_text(interface / "bInterfaceClass"), 16) == 0x01:
+                return True
+        except ValueError:
+            continue
+    return bool(_AUDIO_HINT.search(name))
+
+
 # --------------------------------------------------------------------------- Bluetooth
 
 
@@ -362,20 +569,30 @@ def _enumerate_bluetooth_cli() -> list[DeviceInfo]:
         )
         uuids = frozenset(re.findall(r"UUID:.*\(([0-9a-f-]{36})\)", info.stdout, re.I))
         connected = re.search(r"^\s*Connected:\s*yes", info.stdout, re.I | re.M) is not None
-        paired = re.search(r"^\s*Paired:\s*yes", info.stdout, re.I | re.M) is not None
+        # BlueZ publishes its own freedesktop icon name for a device, derived from the Class of
+        # Device or the BLE Appearance characteristic. Better evidence than guessing from the name:
+        # an MX Master reports `input-mouse` while "MX Master 3S" contains no word this could have
+        # matched on. Headsets report `audio-headset`, which is what they were already getting.
+        icon = re.search(r"^\s*Icon:\s*(\S+)", info.stdout, re.I | re.M)
+        icon_name = icon.group(1) if icon else ""
         out.append(
             DeviceInfo(
                 uid=f"bt:{address}",
                 name=name,
                 transport=Transport.BLUETOOTH,
-                category=_guess_category(name),
+                category=_icon_category(icon_name) or _guess_category(name),
                 address=address,
                 uuids=uuids,
-                # PAIRED, not PRESENT: BlueZ lists a paired headset whether or not it is
-                # switched on, so being in this list does not mean it can be opened.
-                state=(
-                    State.CONNECTED if connected else State.PAIRED if paired else State.PRESENT
-                ),
+                icon_name=icon_name,
+                # **Never CONNECTED.** BlueZ's "connected" means the headset is switched on and
+                # linked to this machine -- it says nothing about whether *this application* has
+                # opened a configuration session, which is what State.CONNECTED is reserved for
+                # and what the sidebar's green dot reports. Enumeration cannot know that.
+                #
+                # So a BlueZ-connected device is PRESENT: "physically available, not yet opened",
+                # which is precisely what it is. Everything else is PAIRED -- in the list, not
+                # openable -- whether BlueZ calls it paired or merely remembers seeing it.
+                state=State.PRESENT if connected else State.PAIRED,
             )
         )
     return out
@@ -471,12 +688,56 @@ def _parse_edid(edid: bytes) -> tuple[str, int, str, str]:
 def enumerate_all() -> list[DeviceInfo]:
     """Every transport, in one sweep. Individual backends fail soft."""
     devices: list[DeviceInfo] = []
-    for fn in (enumerate_hid, enumerate_bluetooth, enumerate_displays):
+    for fn in (enumerate_hid, enumerate_usb, enumerate_bluetooth, enumerate_displays):
         try:
             devices.extend(fn())
         except Exception:
             log.exception("%s failed; continuing with other transports", fn.__name__)
-    return devices
+    return _one_row_per_device(devices)
+
+
+def _one_row_per_device(devices: list[DeviceInfo]) -> list[DeviceInfo]:
+    """Drop a duplicate row when hidraw already produced one for the same physical device.
+
+    Each enumerator is deliberately ignorant of the others -- that is what keeps them simple -- so a
+    device reachable two ways gets found twice. The sidebar still has to show one row per thing you
+    can hold, so the duplicate is resolved here.
+
+    **hidraw wins**, both times, because its row carries strictly more: a node that can be opened,
+    a device kind, and an icon. Losing the *duplicate* costs nothing; a module that needs the other
+    channel can find it from the identifier the two rows share.
+
+    Two ways a device gets found twice:
+
+    *Raw USB.* It exposes a HID interface and a CDC control channel. Matched on the USB device the
+    two rows share.
+
+    *Bluetooth.* A directly-paired mouse or keyboard is both a BlueZ device and a hidraw node.
+    Matched on the address: hidraw reports ``HID_UNIQ``, which is the Bluetooth MAC, and BlueZ
+    reports the same MAC in a different case. **This one was doing real damage.** Every Logitech
+    mouse paired over Bluetooth produced a working, claimed hidraw row *and* an unclaimed BlueZ row
+    reading "no module" -- two entries for one mouse, one of them a dead end, with nothing to say
+    which was which. It is the likeliest explanation for a report that Logitech configuration "does
+    not work over Bluetooth" on a machine where it does.
+
+    Bluetooth *audio* is untouched: a headset has no hidraw node, so nothing matches it and its
+    BlueZ row is the only one. A Poly headset reached through a USB dongle keeps both of its rows
+    too -- the dongle's node carries no ``HID_UNIQ``, so it never collides with the headset's MAC.
+    """
+    hid_rows = [info for info in devices if info.transport is Transport.HID]
+    usb_parents = {str(info.properties.get("usb", "")) for info in hid_rows} - {""}
+    addresses = {info.address.upper() for info in hid_rows} - {""}
+    if not usb_parents and not addresses:
+        return devices
+
+    def is_duplicate(info: DeviceInfo) -> bool:
+        if info.transport is Transport.USB:
+            return Path(info.path).name in usb_parents
+        if info.transport in (Transport.BLUETOOTH, Transport.BLE):
+            return info.address.upper() in addresses
+        return False
+
+    return [info for info in devices if not is_duplicate(info)]
 
 
 #: Subsystems worth waking up for. Anything else on the bus is somebody else's business, and the
@@ -646,6 +907,16 @@ def _parse_uevent(path: Path) -> dict[str, str]:
 
 _AUDIO_HINT = re.compile(r"head(set|phone)|audio|speak|evolve|voyager|wh-|jabra|poly", re.I)
 _INPUT_HINT = re.compile(r"gamepad|controller|8bitdo|joystick|keyboard|mouse", re.I)
+
+
+#: What BlueZ's icon name says a device is. Only the prefixes worth acting on; anything else falls
+#: through to the name guess.
+_ICON_CATEGORIES = {"input": Category.INPUT, "audio": Category.AUDIO}
+
+
+def _icon_category(icon_name: str) -> Category | None:
+    """Category from BlueZ's own icon hint, or None if it says nothing useful."""
+    return _ICON_CATEGORIES.get(icon_name.split("-", 1)[0]) if icon_name else None
 
 
 def _guess_category(name: str) -> Category:

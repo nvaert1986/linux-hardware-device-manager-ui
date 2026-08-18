@@ -42,6 +42,7 @@ from .device import (
     Transport,
     Unreachable,
 )
+from .diagram import Diagram
 from .interaction import SILENT, Interaction, Silent
 from .modules import Enablement, MatchRule, ModuleManifest, ModuleRegistry, VendorAssets
 
@@ -65,6 +66,7 @@ __all__ = [
     "DependencyMissing",
     "DeviceError",
     "DeviceInfo",
+    "Diagram",
     "Enablement",
     "ExtractInstaller",
     "Kind",

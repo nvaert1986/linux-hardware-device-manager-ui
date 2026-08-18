@@ -132,20 +132,61 @@ class DeviceState:
     supported: set[str] = field(default_factory=set)
 
 
+def _legible(text: str) -> float:
+    """Fraction of *text* that looks like something a device would print.
+
+    Deliberately crude. Hardware revisions, serials and build codes are ASCII in practice --
+    letters, digits, and a little punctuation -- so anything outside that is evidence the bytes
+    were not text, or were not text in the encoding just tried.
+
+    **NULs count against a candidate**, which is the whole reason this scores rather than sniffs.
+    UTF-16BE text read as UTF-8 comes out as every other character being a NUL; ignore those and
+    the wrong decoding scores a perfect 1.0 and wins.
+    """
+    if not text:
+        return 0.0
+    good = sum(1 for c in text if c.isascii() and (c.isalnum() or c in " .-_/+:,()[]#"))
+    return good / len(text)
+
+
+#: Below this, a decode is treated as "these bytes are not text in this encoding". Set low on
+#: purpose: the job is to reject binary rendered as CJK, not to police unusual model names.
+LEGIBLE_ENOUGH = 0.8
+
+
 def decode_string(payload: bytes) -> str:
     """Deckard strings: u16 big-endian byte length, then the bytes.
 
     Most are ASCII; HARDWARE_REVISION_STRING is UTF-16BE and zero-padded to its field width.
+
+    **Both encodings are tried and the more legible result wins**, rather than sniffing the first
+    two bytes for a NUL. The sniff was carried over from the reference implementation, which was
+    only ever run against a Voyager 4310, and it has two failure modes that a 4320 hit: an ASCII
+    string with a single leading NUL decodes as CJK, and a field that is not text at all decodes
+    as CJK with no complaint whatsoever. Returning "" for the second case lets the caller fall
+    back to hex, which is at least true.
+
+    Returns "" when neither encoding produces plausible text, so the caller can decide.
     """
     if len(payload) < 2:
         return ""
     length = int.from_bytes(payload[:2], "big")
     body = payload[2:2 + length]
-    if b"\x00" in body[:2] or (len(body) > 1 and body[0] == 0):
-        text = body.decode("utf-16-be", "replace")
-    else:
-        text = body.decode("utf-8", "replace")
-    return text.rstrip("\x00")
+    if not body:
+        return ""
+
+    # Trailing NULs are field padding in both encodings and say nothing about which is right.
+    candidates = [body.decode("utf-8", "replace").rstrip("\x00")]
+    if len(body) >= 2:
+        # UTF-16BE needs an even number of bytes; an odd tail is padding, not a character.
+        candidates.append(body[:len(body) - len(body) % 2]
+                          .decode("utf-16-be", "replace").rstrip("\x00"))
+
+    best = max(candidates, key=_legible)
+    if _legible(best) < LEGIBLE_ENOUGH:
+        return ""
+    # Any NUL still inside the winner is padding the device wrote, not part of the name.
+    return best.replace("\x00", "")
 
 
 class PolyHeadset:
@@ -516,9 +557,16 @@ class PolyHeadset:
                 continue
             if label in ("TATTOO_SERIAL_NUMBER", "TATTOO_BUILD_CODE", "HARDWARE_REVISION_STRING"):
                 text = decode_string(raw)
-                if not text.strip():
-                    continue  # answered, with nothing in it -- a blank row says less than none
-                out[label] = text
+                if text.strip():
+                    out[label] = text
+                elif any(raw[2:]):
+                    # Answered with bytes that are not text in either encoding. Show them as hex,
+                    # the way STACK_VERSION already is: hex is jargon, but it is *true*, and a
+                    # 4320 rendering its hardware revision as Chinese characters is the failure
+                    # this replaces. If a model turns up whose field is genuinely a string in some
+                    # third encoding, the hex is what makes it diagnosable.
+                    out[label] = raw[2:].hex()
+                # else: answered with nothing -- a blank row says less than none.
             elif label == "GENES_GUID":
                 body = raw[2:] if len(raw) > 16 else raw
                 h = body.hex()

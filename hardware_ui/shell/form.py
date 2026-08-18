@@ -37,13 +37,16 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSlider,
+    QTabWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from hardware_ui.core import Advisory, Capability, CapabilitySet, Kind
+from hardware_ui.core import Advisory, Capability, CapabilitySet, Diagram, Kind
 from hardware_ui.core.capability import gate_satisfied
+
+from .diagram import DiagramPanel, caption_label
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +99,8 @@ class CapabilityForm(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._rows: dict[str, CapabilityRow] = {}
+        #: The sub-tab strip holding this group's drawings, created on the first one.
+        self._views: QTabWidget | None = None
         self._values: dict[str, Any] = {}
         self._pending: set[str] = set()
         self._failed: set[str] = set()
@@ -106,6 +111,17 @@ class CapabilityForm(QWidget):
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+
+        # Drawings sit above the form and take the tab's spare height, which is the whole point of
+        # giving them their own strip: a drawing that only ever gets its size hint is a thumbnail
+        # in the top corner of an empty tab. The trailing stretch below is switched off whenever
+        # this is in use, so the two are not competing for the same slack.
+        self._views_holder = QWidget()
+        self._views_layout = QVBoxLayout(self._views_holder)
+        self._views_layout.setContentsMargins(0, 0, 0, 0)
+        self._views_holder.setVisible(False)
+        outer.addWidget(self._views_holder, 1)
+
         self._form = QFormLayout()
         self._form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         # Anchor the form to the top-left. Without this QFormLayout centres its rows, so each tab
@@ -130,12 +146,21 @@ class CapabilityForm(QWidget):
         # than starting at the panel edge.
         self._note.setContentsMargins(16, 12, 16, 0)
         outer.addWidget(self._note)
+        self._tail = outer.count()
         outer.addStretch(1)
+        self._outer = outer
 
     # ------------------------------------------------------------------ building
 
-    def build(self, caps: CapabilitySet) -> None:
-        """Replace the form's contents."""
+    def build(self, caps: CapabilitySet, diagrams: dict[str, Diagram] | None = None) -> None:
+        """Replace the form's contents.
+
+        *diagrams* maps a :attr:`Capability.section` to a drawing of the hardware. A section that
+        has one is laid out around the picture with a leader line from each control to the part it
+        changes; every other section, and every control the drawing cannot point at, falls back to
+        an ordinary two-column row. That fallback is not a corner case: a desktop without Qt's SVG
+        module gets the whole page as a plain form and loses nothing but the picture.
+        """
         self._loading = True
         try:
             while self._form.rowCount():
@@ -143,15 +168,61 @@ class CapabilityForm(QWidget):
             self._rows.clear()
 
             section = ""
+            panel: DiagramPanel | None = None
+            self._clear_views()
             for cap in caps:
-                if cap.section and cap.section != section:
+                if cap.section != section:
                     section = cap.section
-                    self._form.addRow(self._section_header(section))
-                self._add(cap)
+                    panel = self._panel_for(section, diagrams)
+                    if panel is None and section:
+                        self._form.addRow(self._section_header(section))
+                self._add(cap, panel)
         finally:
             self._loading = False
         self._update_note()
         self._restyle()
+
+    def _panel_for(self, section: str, diagrams: dict[str, Diagram] | None) -> DiagramPanel | None:
+        """Start a drawing for this section, or None if it has none this shell can render.
+
+        **Every drawing goes in its own sub-tab**, rather than stacking down the page. Three
+        drawings plus their controls is well over two screens, so stacking them meant the tab
+        opened on a scrollbar the size of a thumbnail and the user had to scroll to discover that
+        the shoulder buttons existed at all. Only one side of a controller is being looked at
+        anyway. The source configurator splits the same way, and so does every vendor tool for a
+        device with more than one face.
+
+        A single drawing still gets a tab, deliberately: a lone tab bar is a small cost against
+        having two layouts to keep working, and it labels what is being shown.
+        """
+        diagram = (diagrams or {}).get(section)
+        if diagram is None:
+            return None
+        panel = DiagramPanel(diagram, self)
+        if not panel.usable:
+            # The module offered a drawing and it could not be loaded. The controls are what
+            # matter, so the section renders as ordinary rows -- `_renderer` has said why already.
+            panel.deleteLater()
+            return None
+
+        if self._views is None:
+            self._views = QTabWidget()
+            self._views.setDocumentMode(True)
+            self._views_layout.addWidget(self._views)
+            self._views_holder.setVisible(True)
+            # The drawings now own the spare height, so the form must stop claiming it.
+            self._outer.setStretch(self._tail, 0)
+        self._views.addTab(_view_page(panel, diagram), section)
+        return panel
+
+    def _clear_views(self) -> None:
+        """Drop any drawings from a previous build, and give the slack back to the form."""
+        if self._views is not None:
+            self._views.setParent(None)
+            self._views.deleteLater()
+            self._views = None
+        self._views_holder.setVisible(False)
+        self._outer.setStretch(self._tail, 1)
 
     def _section_header(self, text: str) -> QWidget:
         holder = QWidget()
@@ -171,9 +242,12 @@ class CapabilityForm(QWidget):
         box.addWidget(line)
         return holder
 
-    def _add(self, cap: Capability) -> None:
+    def _add(self, cap: Capability, panel: DiagramPanel | None = None) -> None:
         control = self._control_for(cap)
-        label = QLabel(f"{cap.label}:")
+        # No colon inside a diagram: the label sits in a bordered card next to its control rather
+        # than in a right-aligned label column, and a trailing colon there reads as a truncation.
+        on_diagram = panel is not None and cap.key in panel.diagram.anchors
+        label = QLabel((cap.short_label or cap.label) if on_diagram else f"{cap.label}:")
         label.setBuddy(control)
         row = CapabilityRow(cap, control, label)
 
@@ -184,7 +258,10 @@ class CapabilityForm(QWidget):
             control.setToolTip(cap.description)
             label.setToolTip(cap.description)
 
-        self._form.addRow(label, control)
+        # The panel takes the same widgets rather than making its own, so every value, pending
+        # flag and gate in this class keeps working on a control that moved into a picture.
+        if not (panel is not None and panel.add(cap.key, label, control)):
+            self._form.addRow(label, control)
         self._rows[cap.key] = row
 
     def _control_for(self, cap: Capability) -> QWidget:
@@ -381,14 +458,24 @@ class CapabilityForm(QWidget):
         """
         row = self._rows.get(key)
         if row is None:
-            # It may still be something another row shows *after* its own value -- a countdown
-            # beside a one-time code. Store it and repaint whoever depends on it.
-            dependants = [r for r in self._rows.values() if r.cap.suffix_from == key]
-            if not dependants:
-                return
+            # No row here, but the value is still this tab's business for two reasons, and the
+            # second one is why the Creative equaliser was dead on arrival.
+            #
+            # It may be something another row shows *after* its own value -- a countdown beside a
+            # one-time code.
+            #
+            # It may be what one of this tab's rows is **gated on**. A `requires` naming a
+            # capability in another group resolved against this form's own value map, which never
+            # held it, so `gate_satisfied` compared `None` and every dependent row stayed disabled
+            # for ever. That is not a rare shape: Direct Mode lives on the Sound tab and bypasses
+            # the whole Equalizer tab, which is exactly the interlock `requires` exists for.
+            #
+            # So the value is always recorded. Storing a key this form does not draw costs one
+            # dictionary entry and cannot paint anything, because painting is driven by rows.
             self._values[key] = value
-            for dependant in dependants:
+            for dependant in [r for r in self._rows.values() if r.cap.suffix_from == key]:
                 self._paint(dependant)
+            self._restyle()
             return
         if key in self._pending and not confirmed:
             return
@@ -561,17 +648,30 @@ class CapabilityForm(QWidget):
             row.label.setEnabled(enabled)
 
 
+def _view_page(panel: DiagramPanel, diagram: Diagram) -> QWidget:
+    """One sub-tab: the drawing, filling the tab, with its caption underneath."""
+    page = QWidget()
+    box = QVBoxLayout(page)
+    box.setContentsMargins(0, 0, 0, 0)
+    box.setSpacing(0)
+    box.addWidget(panel, 1)
+    if diagram.caption:
+        box.addWidget(caption_label(diagram))
+    return page
+
+
 def build_forms(
     caps: CapabilitySet,
     on_changed: Callable[[str, Any], None],
     on_triggered: Callable[[str], None],
     on_copied: Callable[[str], None] | None = None,
+    diagrams: dict[str, Diagram] | None = None,
 ) -> dict[str, CapabilityForm]:
     """One form per group, in the module's declared order -- i.e. one per tab."""
     forms: dict[str, CapabilityForm] = {}
     for group, members in caps.groups().items():
         form = CapabilityForm()
-        form.build(CapabilitySet(list(members)))
+        form.build(CapabilitySet(list(members)), diagrams)
         form.changed.connect(on_changed)
         form.triggered.connect(on_triggered)
         if on_copied is not None:

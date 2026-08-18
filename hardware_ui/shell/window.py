@@ -50,6 +50,7 @@ from PyQt6.QtWidgets import (
 from hardware_ui.core import (
     CapabilitySet,
     DeviceInfo,
+    Diagram,
     Kind,
     PromptField,
     State,
@@ -380,12 +381,14 @@ class DevicePage(QWidget):
         )
         self._photo.setVisible(True)
 
-    def show_capabilities(self, caps: CapabilitySet) -> None:
+    def show_capabilities(
+        self, caps: CapabilitySet, diagrams: dict[str, Diagram] | None = None
+    ) -> None:
         # tabText returns the label with its escaping intact, so compare like with like below.
         current = self._tabs.tabText(self._tabs.currentIndex()) if self._tabs.count() else ""
         self._tabs.clear()
         self._forms = build_forms(
-            caps, self.changed.emit, self.triggered.emit, self.copied.emit
+            caps, self.changed.emit, self.triggered.emit, self.copied.emit, diagrams
         )
         for group, form in self._forms.items():
             # Two things a long page needs, both found on a Jabra Evolve2 85 whose 15 groups
@@ -412,6 +415,56 @@ class DevicePage(QWidget):
 
     def forms(self) -> dict[str, CapabilityForm]:
         return self._forms
+
+    def publish(self, key: str, value: Any, *, confirmed: bool = False) -> None:
+        """Announce a value to every tab, not only the one that draws it.
+
+        A tab needs values it has no row for: to show one after somebody else's reading, and --
+        the case this method exists for -- to resolve a ``requires`` that names a capability in
+        another group. Direct Mode sits on the Sound tab and gates the whole Equalizer tab, and
+        sending its new value only to the form that owns the checkbox left the equaliser greyed
+        out until the next full refresh.
+        """
+        for form in self._forms.values():
+            form.set_value(key, value, confirmed=confirmed)
+
+    def publish_advisories(self, advisories: dict[str, Any]) -> None:
+        """Give every tab the whole advisory map; each shows the one belonging to its own rows."""
+        for form in self._forms.values():
+            form.set_advisories(advisories)
+
+    def all_keys(self) -> list[str]:
+        """Every capability key on the page, across all tabs."""
+        # noqa: SIM118 -- CapabilityForm.keys() is a method of ours, not a mapping's.
+        return [key for form in self._forms.values() for key in form.keys()]  # noqa: SIM118
+
+    def publish_pending(self, keys: list[str], key: str, value: Any) -> None:
+        """Mark a write in flight on every tab, not only the one that owns the control.
+
+        A device whose settings are written as one block has to freeze the whole page while that
+        happens; a tab left live is a tab where a value can be changed after the record carrying it
+        was built. Each form ignores the keys it has no row for.
+        """
+        for form in self._forms.values():
+            form.set_pending(keys, key, value)
+
+    def publish_clear_pending(self, keys: list[str]) -> None:
+        for form in self._forms.values():
+            form.clear_pending(keys)
+
+    def publish_result(self, key: str, ok: bool, message: str = "") -> None:
+        """Mark an action's outcome on every tab that offers it.
+
+        One action can appear on several tabs -- a device whose settings are only written on a
+        single "apply" wants that button wherever the user is working. Sending the tick to the
+        first form that owns the key would put it on a tab they are not looking at.
+        """
+        for form in self._forms.values():
+            form.set_result(key, ok, message)
+
+    def clear_result(self, key: str) -> None:
+        for form in self._forms.values():
+            form.clear_result(key)
 
     def _on_connect(self) -> None:
         if self._connected:

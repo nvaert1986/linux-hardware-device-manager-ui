@@ -857,10 +857,18 @@ def test_cached_devices_are_not_filed_as_disconnected():
     assert _section(cached) == "INPUT"
 
     # A Bluetooth device BlueZ merely remembers is still disconnected, which is the case the
-    # bucket exists for.
+    # bucket exists for. PAIRED, because that is what enumeration now emits for anything it cannot
+    # reach -- PRESENT is reserved for "switched on and linked to this machine".
     absent = DeviceInfo(uid="u", name="WH-1000XM4", transport=Transport.BLUETOOTH,
-                        category=Category.AUDIO, state=State.PRESENT)
+                        category=Category.AUDIO, state=State.PAIRED)
     assert _section(absent) == DISCONNECTED
+
+    # The other half of that rename: a headset BlueZ reports as connected is reachable, so it
+    # files under its own category even though nobody has pressed Connect yet. It does *not* get
+    # a green dot -- that is State.CONNECTED, which only the shell writes.
+    live = DeviceInfo(uid="u", name="WH-1000XM4", transport=Transport.BLUETOOTH,
+                      category=Category.AUDIO, state=State.PRESENT)
+    assert _section(live) == "AUDIO"
 
     # ...and a *cached* Bluetooth device is the same case, not an unscanned one. BlueZ remembers
     # every headset ever paired and most are switched off, so treating UNKNOWN as settled here put
@@ -942,3 +950,131 @@ def test_an_unwritable_control_is_disabled_but_a_readout_is_not(qapp):
     assert not form._rows["frozen.choice"].control.isEnabled()
     assert not form._rows["frozen.toggle"].control.isEnabled()
     assert form._rows["live.choice"].control.isEnabled()
+
+
+def test_a_switched_on_bluetooth_headset_gets_no_green_dot_until_connect(qapp):
+    """Reported from the field: a Bluetooth headset showed the green "connected" dot before anyone
+    had pressed Connect, which no other application does.
+
+    The cause was `State.CONNECTED` doing two jobs. Enumeration used it for "BlueZ has a link to
+    this device"; the shell uses it for "this application has an open session", and the dot reports
+    the second. Enumeration now says PRESENT -- available, not yet opened.
+    """
+    from PyQt6.QtCore import Qt
+
+    from hardware_ui.core.device import Category, DeviceInfo, State, Transport
+    from hardware_ui.shell.window import Sidebar
+
+    def row(state):
+        return DeviceInfo(uid="bt:a", name="WH-1000XM4", transport=Transport.BLUETOOTH,
+                          category=Category.AUDIO, state=state, module_id="sony_headsets")
+
+    bar = Sidebar()
+
+    def device_row():
+        # The list carries section headings too, so find the row by uid rather than by index.
+        for i in range(bar._list.count()):
+            item = bar._list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == "bt:a":
+                return item
+        raise AssertionError("the device row is missing from the sidebar")
+
+    bar.reconcile([row(State.PRESENT)])
+    item = device_row()
+    assert item.data(Qt.ItemDataRole.UserRole + 1) is None, "no dot before Connect"
+    assert "connected" not in item.text()
+
+    # ...and green once the shell reports its own session.
+    bar.reconcile([row(State.CONNECTED)])
+    item = device_row()
+    assert item.data(Qt.ItemDataRole.UserRole + 1) == "#27ae60"
+    assert "connected" in item.text()
+
+
+def test_enumeration_never_claims_a_session_it_has_not_opened():
+    """The rule the fix rests on, asserted directly against the enumerator's own output."""
+    import subprocess
+
+    from hardware_ui.core import discovery
+    from hardware_ui.core.device import State
+
+    listing = "Device AA:BB:CC:DD:EE:01 Live\nDevice AA:BB:CC:DD:EE:02 Resting\n"
+    info = {
+        "AA:BB:CC:DD:EE:01": "\tConnected: yes\n\tPaired: yes\n",
+        "AA:BB:CC:DD:EE:02": "\tConnected: no\n\tPaired: yes\n",
+    }
+
+    def fake_run(cmd, *a, **k):
+        if "devices" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=listing, stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout=info[cmd[-1]], stderr="")
+
+    import unittest.mock
+
+    with unittest.mock.patch.object(subprocess, "run", fake_run):
+        found = {d.address: d.state for d in discovery._enumerate_bluetooth_cli()}
+
+    assert found == {"AA:BB:CC:DD:EE:01": State.PRESENT, "AA:BB:CC:DD:EE:02": State.PAIRED}
+    assert State.CONNECTED not in found.values()
+
+
+def test_a_claiming_module_supplies_a_category_only_when_none_was_found():
+    """A module that claims a device knows what it is; enumeration was guessing. But a
+    classification drawn from real evidence -- a HID report descriptor, a USB interface class --
+    must never be overruled by a manifest.
+
+    The case: a Logitech mouse switched off has no hidraw node left, so only its BlueZ row remains,
+    and that row's category could only be guessed from its name. "MX Master 3S" contains no word to
+    match, so it went to OTHER and drew the generic peripherals icon -- while the very same mouse
+    showed a mouse icon a moment earlier.
+    """
+    from hardware_ui.core.device import Category, DeviceInfo, Transport
+    from hardware_ui.core.modules import ModuleRegistry
+
+    registry = ModuleRegistry.discover()
+
+    unguessable = DeviceInfo(uid="bt:a", name="MX Master 3S", transport=Transport.BLUETOOTH,
+                             category=Category.OTHER, address="DE:D7:4B:FC:27:EA",
+                             uuids=frozenset({"00010000-0000-1000-8000-011f2000046d"}))
+    claimed = registry.claim(unguessable)
+    assert claimed.module_id == "logitech_peripherals"
+    assert claimed.category is Category.INPUT, "the manifest should fill in an OTHER category"
+
+    # And a category that came from evidence survives being claimed.
+    evidenced = DeviceInfo(uid="bt:b", name="MX Master 3S", transport=Transport.BLUETOOTH,
+                           category=Category.AUDIO, address="DE:D7:4B:FC:27:EA",
+                           uuids=frozenset({"00010000-0000-1000-8000-011f2000046d"}))
+    assert registry.claim(evidenced).category is Category.AUDIO
+
+
+def test_a_switched_off_bluetooth_logitech_device_is_listed_rather_than_vanishing():
+    """The reported bug. Switching the mouse off removes its hidraw node, leaving only the BlueZ
+    row; with no Bluetooth match rule that row was unclaimed, and an unclaimed row is never
+    rendered -- so the mouse disappeared instead of moving to Disconnected devices.
+
+    Sony and Poly never had this because they match Bluetooth in the first place.
+    """
+    from hardware_ui.core.device import Category, DeviceInfo, State, Transport
+    from hardware_ui.core.modules import ModuleRegistry
+    from hardware_ui.shell.window import DISCONNECTED, _section
+
+    off = DeviceInfo(uid="bt:a", name="MX Master 3S", transport=Transport.BLUETOOTH,
+                     category=Category.OTHER, address="DE:D7:4B:FC:27:EA", state=State.PAIRED,
+                     uuids=frozenset({"00010000-0000-1000-8000-011f2000046d"}))
+    claimed = ModuleRegistry.discover().claim(off)
+    assert claimed.supported, "an unclaimed row is never rendered, so the device would vanish"
+    assert not claimed.ready, "switched off is not connectable"
+    assert _section(claimed) == DISCONNECTED
+
+
+def test_the_bluetooth_rule_needs_logitechs_own_service_not_just_the_transport():
+    """Scoped to Logitech's vendor GATT service, whose last four hex digits are their vendor id.
+    A Logitech Bluetooth speaker does not carry it, so this cannot claim a device the module has no
+    business with."""
+    from hardware_ui.core.device import Category, DeviceInfo, Transport
+    from hardware_ui.core.modules import ModuleRegistry
+
+    speaker = DeviceInfo(uid="bt:z", name="Logitech Boombox", transport=Transport.BLUETOOTH,
+                         category=Category.AUDIO, address="AA:BB:CC:DD:EE:FF",
+                         uuids=frozenset({"0000110b-0000-1000-8000-00805f9b34fb"}))
+    assert not ModuleRegistry.discover().claim(speaker).module_id

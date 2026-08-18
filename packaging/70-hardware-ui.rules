@@ -18,6 +18,23 @@
 # HID++, FIDO2/CTAP security keys, Dell docks.
 SUBSYSTEM=="hidraw", MODE="0660", TAG+="uaccess"
 
+# Creative sound cards and headphone amplifiers speak a vendor protocol over a CDC-ACM function,
+# which is claimed with libusb rather than opened as a node -- so unlike every other rule here,
+# this one has to name a vendor. Scoped to Creative Technology (041e) precisely because a blanket
+# `SUBSYSTEM=="usb"` rule would hand every USB device on the machine to the logged-in session.
+#
+# On kernels without `cdc_acm` nothing is bound to those interfaces, so libusb claims them without
+# detaching a driver and without disturbing ALSA, which owns only the audio interfaces.
+SUBSYSTEM=="usb", ATTR{idVendor}=="041e", MODE="0660", TAG+="uaccess"
+
+# 8BitDo's Xbox controllers speak GIP on a vendor-specific interface and expose no hidraw at all,
+# so the interface has to be claimed with libusb -- the same situation as Creative, and the same
+# reason this rule has to name a vendor rather than a node type.
+#
+# Claiming detaches xpad, which is put back on the way out. While a configuration read or write is
+# in flight the controller stops acting as a gamepad for about a second.
+SUBSYSTEM=="usb", ATTR{idVendor}=="2dc8", MODE="0660", TAG+="uaccess"
+
 # DDC/CI for monitors. The i2c-dev kernel module must also be loaded, and membership of the `i2c`
 # group is what ddcutil itself needs -- see docs/INSTALL.md.
 SUBSYSTEM=="i2c-dev", MODE="0660", TAG+="uaccess"

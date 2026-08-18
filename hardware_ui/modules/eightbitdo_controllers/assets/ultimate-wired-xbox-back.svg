@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 760" width="1000" height="760">
+  <!--
+    The back of an 8BitDo Ultimate Wired Controller for Xbox, drawn for this project.
+
+    Exists because the two rear paddles cannot honestly be drawn on a front view: their true
+    position is directly behind the D-pad and the right stick. Every attempt to show them face-on
+    either floated them somewhere they are not, or overlapped the controls in front of them.
+
+    **The silhouette is the front view's, unchanged.** It is the same shell from the other side, so
+    reusing the path keeps the two drawings the same size and shape by construction rather than by
+    a second round of measurement. Anything that fixes one fixes both.
+
+    **Paddle geometry is measured**, from the back render inside the vendor's Android app — their
+    product photography has no back view at all, checked across all 17 images. Centres at 0.250 and
+    0.750 of the body width and 0.550 of its height, which is (280, 434) and (720, 434) here; shape
+    a rounded teardrop, wider at the top, tapering inwards. That render was a dimensional reference
+    only and is not redistributed.
+
+    Left and right are mirror images on the hardware. Which paddle is which is settled by the record
+    offsets, proven from a capture, and never by this drawing.
+
+    Note for editors: XML forbids a double hyphen inside a comment. Use an em dash.
+  -->
+  <defs>
+    <style>
+      .body   { fill: none;    stroke: #7d838d; stroke-width: 5; stroke-linejoin: round; }
+      .part   { fill: none;    stroke: #7d838d; stroke-width: 4; }
+      .thin   { fill: none;    stroke: #7d838d; stroke-width: 3; stroke-linecap: round; }
+      .fillet { fill: #7d838d; fill-opacity: .10; stroke: #7d838d; stroke-width: 4; }
+      .mark   { fill: #7d838d; fill-opacity: .60; stroke: none; }
+      /* The guide button is a glossy black sphere; a filled disc is what reads at any size. */
+      .disc   { fill: #7d838d; fill-opacity: .55; stroke: #7d838d; stroke-width: 4; }
+      .led    { fill: #7d838d; fill-opacity: .40; stroke: none; }
+      .face   { stroke-width: 4; fill-opacity: .18; }
+      .letter { font-family: sans-serif; font-size: 30px; font-weight: 700; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <path class="body" d="M 500,90
+    C 630,90 745,100 817,118
+    C 872,132 908,180 922,260
+    C 936,340 942,460 936,552
+    C 930,630 906,676 862,700
+    C 826,720 792,700 762,660
+    C 730,616 700,560 690,530
+    C 640,514 570,510 500,510
+    C 430,510 360,514 310,530
+    C 300,560 270,616 238,660
+    C 208,700 174,720 138,700
+    C 94,676 70,630 64,552
+    C 58,460 64,340 78,260
+    C 92,180 128,132 183,118
+    C 255,100 370,90 500,90 Z"/>
+
+  <!-- ======================================================= the paddles, at their true position -->
+  <path id="anchor-PADDLE_L" class="fillet"
+        d="M 246,378 C 249,358 266,349 286,351 C 305,353 317,368 315,388
+           C 312,424 299,456 281,474 C 269,486 251,481 245,466
+           C 237,443 240,398 246,378 Z"/>
+  <path id="anchor-PADDLE_R" class="fillet"
+        d="M 754,378 C 751,358 734,349 714,351 C 695,353 683,368 685,388
+           C 688,424 701,456 719,474 C 731,486 749,481 755,466
+           C 763,443 760,398 754,378 Z"/>
+</svg>

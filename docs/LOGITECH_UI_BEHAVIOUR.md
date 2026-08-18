@@ -199,6 +199,37 @@ device state wholesale, and no G-series hardware exists here to run it against. 
 path nobody has executed is how a mouse ends up in a state its owner cannot undo. `PROJECT_STATE.md`
 §5e tracks it.
 
+## 4d. Bluetooth: two rows for one mouse, and which one wins
+
+A mouse paired directly over Bluetooth — no receiver — appears **twice**, because two enumerators
+find it independently and neither knows about the other:
+
+| row | what it is | claimed by |
+|---|---|---|
+| hidraw | the node HID++ actually flows over | the `transport = "hid"` rules |
+| BlueZ | the paired device BlueZ remembers | the `transport = "bluetooth"` rule |
+
+`discovery._one_row_per_device` drops the BlueZ duplicate whenever the hidraw node exists, matching
+on the address — hidraw reports it as `HID_UNIQ`, BlueZ in a different case. So in practice the
+hidraw row is what you see and configure.
+
+**The Bluetooth rule exists for the switched-off case.** Turn the mouse off and the kernel tears
+down its hidraw node; only the BlueZ row survives. Without a rule to claim it that row is never
+rendered, and the mouse does not move to "Disconnected devices" — it disappears from the list
+altogether. Sony and Poly never had this because they match Bluetooth in the first place.
+
+The rule is scoped to `00010000-0000-1000-8000-011f2000046d`, Logitech's own vendor GATT service,
+whose last four hex digits are their vendor id. As specific as a vendor id, advertised by the device
+itself, and not carried by a Logitech Bluetooth speaker — so it cannot claim something this module
+has no business with. `family`, because a row that only appears while the device is unreachable is
+not one anyone can test against.
+
+Classification comes from the device rather than from its name. `_hid_kind` reads the USB interface's
+protocol byte and a Bluetooth device has no USB interface, so the mouse used to get no kind at all
+and its category fell back to whether the name contained the word "mouse" — which "Logitech MX
+Master 3S" does not. The HID report descriptor answers properly, and BlueZ supplies its own icon
+hint for its rows.
+
 ## 5. Four setting kinds are not shown
 
 A setting's validator says what shape its value is. Four map onto controls; four describe a value

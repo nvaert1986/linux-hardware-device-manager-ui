@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 375" width="1000" height="375">
+  <!--
+    The top edge of an 8BitDo Ultimate Wired Controller for Xbox, drawn for this project.
+
+    Exists because the shoulders and triggers cannot honestly be drawn on a front view. From the
+    face, LB and RB are a thin sliver over the top edge and LT and RT are completely hidden behind
+    them; an earlier version invented four stacked pills floating above the shell, which is what
+    they looked like.
+
+    MEASURED FROM the trigger screen inside the vendor's Android app, which is a straight-on top
+    view and helpfully highlights LT and RT so they can be found by colour rather than by eye:
+
+      render 1272 x 696
+      LT  x  98..298   y 320..517    centre (201, 408)   200 x 197
+      RT  x 973..1173  y 320..517    centre (1069, 408)  200 x 197
+      LB / RB  the pads directly above, y 173..320
+
+    LT and RT come out mirrored about x 635.5 against a shell centre of 635.5, which is the check
+    that the measurement is sound. The shell profile was sampled every 100 px: top edge flat at
+    y 90, bottom edge y 429 in the middle, falling to 595 and 605 at the far left and right as the
+    grips flare away.
+
+    The pads keep the measured *proportions* (bumper wider than tall, trigger larger and squarer,
+    trigger below and outboard of the bumper) at 0.8 of the mapped size, so that both sit clear of
+    the shell's lower edge. At full size the underside line ran straight through LT and RT, which is
+    the same class of problem as drawing them on the front view: a line that crosses a control makes
+    the control look broken. Fidelity loses to legibility here, and the front view is what carries
+    the recognisable silhouette. That render was a dimensional reference only and is not
+    redistributed; every path here is drawn.
+
+    Note for editors: XML forbids a double hyphen inside a comment. Use an em dash.
+  -->
+  <defs>
+    <style>
+      .body   { fill: none;    stroke: #7d838d; stroke-width: 5; stroke-linejoin: round; }
+      .part   { fill: none;    stroke: #7d838d; stroke-width: 4; }
+      .fillet { fill: #7d838d; fill-opacity: .10; stroke: #7d838d; stroke-width: 4; }
+      .label  { font-family: sans-serif; font-size: 26px; font-weight: 600; text-anchor: middle;
+                fill: #7d838d; }
+    </style>
+  </defs>
+
+  <!-- ======================================================= shell
+       Wide and shallow: flat across the top, the underside rising to the middle and falling away
+       at both ends where the grips begin. Mirrored exactly about x=500. -->
+  <path class="body" d="M 500,32
+    C 700,32 860,40 920,56
+    C 962,68 978,110 974,172
+    C 970,242 950,302 900,322
+    C 848,342 700,304 500,304
+    C 300,304 152,342 100,322
+    C 50,302 30,242 26,172
+    C 22,110 38,68 80,56
+    C 140,40 300,32 500,32 Z"/>
+
+  <!-- The 3.5 mm headset jack, mid-underside. Not configurable; drawn because the real edge has a
+       hole in it and a blank shell reads as an unfinished drawing. -->
+  <circle class="part" cx="500" cy="168" r="16"/>
+
+  <!-- ======================================================= bumpers and triggers
+       **Not two rounded rectangles**, which is what an earlier version drew without looking. Each
+       side is one tombstone-shaped pad divided across the middle: the bumper has rounded top
+       corners and a flat lower edge, and the trigger has a flat top and a strongly rounded, very
+       slightly tapered bottom. They share that dividing line, and they are the *same width* as each
+       other, which the rectangles were not.
+
+       Measured off the vendor top view: the combined pad is 206 x 330 px there, split 147 above and
+       183 below, so 0.445 / 0.555 of its height. Here that is 124 x 180, split 80 and 100. -->
+  <path id="anchor-LB" class="fillet"
+        d="M 100,150 L 100,106 C 100,86 116,70 136,70 L 188,70
+           C 208,70 224,86 224,106 L 224,150 Z"/>
+  <path id="anchor-LT" class="fillet"
+        d="M 100,150 L 224,150 L 224,198 C 224,228 202,250 162,250
+           C 122,250 100,228 100,198 Z"/>
+  <path id="anchor-RB" class="fillet"
+        d="M 900,150 L 900,106 C 900,86 884,70 864,70 L 812,70
+           C 792,70 776,86 776,106 L 776,150 Z"/>
+  <path id="anchor-RT" class="fillet"
+        d="M 900,150 L 776,150 L 776,198 C 776,228 798,250 838,250
+           C 878,250 900,228 900,198 Z"/>
+
+  <!-- The pads used to be named on the drawing, because two stacked shapes either side are
+       ambiguous on their own. The leader lines name them now, and they name them at the pad's
+       centre, which is precisely where the text was: every line was drawn straight through its own
+       label. The lines are the better answer, so the text goes. -->
+</svg>

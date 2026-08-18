@@ -1416,8 +1416,11 @@ def test_a_suffix_push_reaches_the_form_that_has_no_row_for_it(qapp):
 
     label = getattr(owning._rows["code"].control, "readout", owning._rows["code"].control)
     assert "7 s" in label.text()
-    # A form that neither owns nor depends on the key is untouched.
-    assert unrelated.value_of("left") is None
+    # A form with no row for the key still *records* it. It draws nothing — drawing is driven by
+    # rows — but a row on this tab may be gated on a capability that belongs to another one, and
+    # discarding the value left every such row disabled for ever. See the cross-group gate test.
+    assert unrelated.value_of("left") == "7 s"
+    assert unrelated.keys() == ["other"], "recording a value must not invent a row"
 
 
 def test_each_account_counts_down_on_its_own_clock(device):
@@ -1618,7 +1621,20 @@ def test_a_restart_write_reconnects_however_it_ends(qapp):
         controller = Controller.__new__(Controller)
         controller._selected = Info()
         controller._open = {"hid:3-3": Dev(raises)}
-        controller._window = type("W", (), {"notify": staticmethod(lambda *a, **k: None)})()
+        # `page.publish` rather than a single form: a value is announced to every tab, because a
+        # tab may be gated on a capability that belongs to another group.
+        controller._window = type("W", (), {
+            "notify": staticmethod(lambda *a, **k: None),
+            "page": type("P", (), {
+                "publish": staticmethod(lambda *a, **k: None),
+                "publish_advisories": staticmethod(lambda *a, **k: None),
+                "publish_pending": staticmethod(lambda *a, **k: None),
+                "publish_clear_pending": staticmethod(lambda *a, **k: None),
+                "publish_result": staticmethod(lambda *a, **k: None),
+                "clear_result": staticmethod(lambda *a, **k: None),
+                "all_keys": staticmethod(lambda: []),
+            })(),
+        })()
         controller._ui = lambda fn, *a, **k: None
         controller._form_for = lambda _k: Form()
         controller._group = lambda k: [k]

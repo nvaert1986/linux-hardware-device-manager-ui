@@ -340,7 +340,18 @@ class ModuleRegistry:
         if not hits:
             return info
         manifest, rule = max(hits, key=lambda hit: self._specificity(hit[0]))
-        return dataclasses.replace(info, module_id=manifest.id, support=rule.support)
+        # A module that claims a device knows what it is; enumeration was only guessing. Applied
+        # *only* to devices still filed under OTHER, so a classification drawn from real evidence
+        # -- a HID report descriptor, a USB interface class -- is never overruled by a manifest.
+        #
+        # The case this exists for: a Logitech mouse switched off has no hidraw node left, so all
+        # that remains is its BlueZ row, whose category could only be guessed from whether the name
+        # happened to contain the word "mouse". "MX Master 3S" does not, so it went to OTHER and
+        # drew the generic peripherals icon -- the same row that shows a mouse icon while the
+        # device is switched on.
+        category = manifest.category if info.category is Category.OTHER else info.category
+        return dataclasses.replace(
+            info, module_id=manifest.id, support=rule.support, category=category)
 
     def expand(self, devices: Sequence[DeviceInfo]) -> list[DeviceInfo]:
         """*devices*, plus any a module can reach only through one of them.

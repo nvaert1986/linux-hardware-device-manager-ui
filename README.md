@@ -1,6 +1,6 @@
 # Linux Hardware Device Manager UI (LHDMUI)
 
-**Version 0.10.** One uniform interface for configuring USB, Bluetooth and DDC/CI hardware on
+**Version 0.10.1.** One uniform interface for configuring USB, Bluetooth and DDC/CI hardware on
 Linux.
 
 The distribution, the Python package and the desktop-entry id stay `hardware-ui`: those are
@@ -25,7 +25,7 @@ own.
 It was not unreviewed, but be precise about what the review was. **Nobody read every line of this
 tree.** The review that did happen was at the level of behaviour and design: decisions were argued
 over rather than accepted, output was checked against what the hardware actually did, bugs found on
-the bench were traced and fixed, and the tree carries 724 tests that run with no hardware attached.
+the bench were traced and fixed, and the tree carries 974 tests that run with no hardware attached.
 That applies to the code here and doubly to `hardware_ui/third_party/`, 15,590 lines of vendored
 library that is pinned, patched at five named sites and smoke-tested rather than audited. Where the
 reasoning behind something is not obvious from the code it is written down: `PROJECT_STATE.md` and
@@ -39,6 +39,18 @@ writes at all, reads only where it does not (the Dell dock), and a note where th
 done in the source project a module was ported from rather than here. But it is a handful of
 devices. Everything outside that table is inference from a protocol, a vendor catalogue or another
 project's code, and it can be wrong.
+
+**Two modules are experimental even by that standard**, and are called out here rather than only in
+the table so it cannot be missed:
+
+* **Creative Sound Blaster**
+* **8BitDo Xbox wired controllers**
+
+Both are new, both are reverse-engineered rather than built on a documented protocol, and **both
+will contain bugs.** Every session against real hardware so far has found one — including, in the
+8BitDo case, a save that reported success, read back correctly, and was gone the moment the
+controller was unplugged. They are usable and worth having; they are not settled. If you use them,
+expect to find something, and know what your device was set to before you start.
 
 **Use it at your own risk.** The GPL's disclaimer of warranty is not a formality here; it is the
 accurate description. If your device is not in the table below, treat the first write as an
@@ -66,8 +78,11 @@ experiment.
 | Vendor assets (`RegistryFetch`, `ExtractInstaller`) | working — offered in-app on Connect, and `cli --import-vendor`; verified on the real Poly Studio MSI |
 | **Jabra module** | **complete; verified on a Link 390 + Evolve2 85 + deskstand** — 68 headset settings, the adapter's own 32, equalizer, battery, live state. Needs the vendor catalogue (ISC, fetched on consent) |
 | **Logitech module** | **complete; verified on a Logi Bolt receiver, MX Master 3S and MX Keys S** — reads and writes, including per-key button remapping. Paired devices get their own sidebar entries even where no kernel driver exposes them. Solaar's library vendored GUI-free; no runtime dependency. **Adds a few seconds to the first scan** — see below. Pairing implemented but unexercised |
+| **Creative module** | **EXPERIMENTAL — expect bugs.** Newest module here, and by some margin the least settled: most of what it does was worked out against one card over a single evening, and every session against real hardware so far has found something. Exercised on a Sound Blaster X4 — the CDC-ACM transport, the AES-256-GCM unlock, feature toggles, output routing, Super X-Fi, the 10-band equaliser with presets, and the card's four stored modes. Other Creative models are untested: the module matches on vendor id alone. Audio Balance is missing. Host-side DSP effects (X-Bass, Dialog Plus) are deliberately not carried — see [CREATIVE_UI_BEHAVIOUR](docs/CREATIVE_UI_BEHAVIOUR.md) §6a, §8 |
+| **8BitDo module** | **EXPERIMENTAL — expect bugs.** Xbox wired controllers only, and every layer of it has had a correction found on hardware, including one that let a save look successful and survive nothing. Exercised over USB on an Ultimate Wired Controller for Xbox — read, remap, save and read-back. Three profiles, 19 remaps including the back paddles, 11 toggles, 8 sliders, written by an explicit Sync button. The BLE config radio sends the same save session but has not been run through this shell, and in config mode every 8BitDo controller advertises under one name, so an unrecognised model gets no drawings and a warning. Original controller artwork, drawn on the page with the controls around it — see [EIGHTBITDO_UI_BEHAVIOUR](docs/EIGHTBITDO_UI_BEHAVIOUR.md) §2, §7 |
 | ASUS module | not started |
 | Profiles / copy settings between devices | not built — belongs in the shell, not a module |
+| System tray icon | **working** — Open and Quit on right-click, click to toggle. Closing the window keeps it running in the tray; Quit exits. Skipped entirely where the desktop has no tray, so it can never leave the app unquittable |
 | Modules page (enable/disable UI) | **working** — Modules… beside Rescan; three states, written through to `modules.toml` |
 
 > **Logitech receivers make the first scan slow.** With a Logitech receiver attached and the module
@@ -135,6 +150,8 @@ Each row is what that one module needs. Miss it and only that family is unavaila
 | `fido2_security_keys` | `dev-python/fido2` | read/write on the key's `/dev/hidraw*` — the `uaccess` udev rule in [INSTALL](docs/INSTALL.md) | keys are listed but Connect explains the library is missing. Pure Python: no compiler, no `libfido2` bindings |
 | `yubikeys` | `app-crypt/yubikey-manager` — **optional even here** | nothing further: the management application is read over the FIDO interface already open, so **no `pcscd` and no smartcard stack** | the key still works as a CTAP key. Only the vendor tab collapses to one row naming the package |
 | `dell_docks` | — | nothing; reads sysfs and Thunderbolt directly | `fwupdmgr` is consulted when present for firmware detail and skipped when not |
+| `eightbitdo_controllers` | `dev-python/pyusb`; `dev-python/dbus-python` for the Bluetooth path | the udev rule in [INSTALL](docs/INSTALL.md). USB is preferred and is the only way to read the configuration checksum, so connect by cable once even if you intend to use Bluetooth | devices are listed but Connect explains which package is missing |
+| `creative_peripherals` | `dev-python/pyusb` and `dev-python/cryptography` | the udev rule in [INSTALL](docs/INSTALL.md) — this is the one module that *claims* a USB interface rather than opening a node. `cryptography` is not optional: the card discards every command until an AES-256-GCM handshake unlocks it | devices are listed but Connect explains which package is missing |
 
 **Modules claim hardware by vendor, not by device class**, so a Logitech mouse can never land in
 the Razer module: every rule is gated on a vendor id, a service UUID or a vendor-specific property
@@ -147,7 +164,7 @@ the more specialised module wins.
 
 | Package | Why |
 |---|---|
-| `dev-python/pytest` | the test suite — 721 tests, no hardware and no vendor dependency needed |
+| `dev-python/pytest` | the test suite — 974 tests, no hardware and no vendor dependency needed |
 | `dev-python/pyudev` | **hotplug** — the list updates itself as USB, HID and DRM devices come and go. A thin binding to libudev, which does the work. Without it nothing is lost but the automatic refresh: Rescan behaves exactly as before |
 | `app-arch/msitools`, `app-arch/7zip` | unpacking vendor installers for `ExtractInstaller` |
 | `dev-python/hatchling` | building a wheel |
@@ -158,6 +175,8 @@ emerge -av dev-python/pyqt6 kde-frameworks/breeze-icons   # everyone
 emerge -av app-misc/ddcutil                               # monitors
 emerge -av sys-apps/openrazer-daemon                      # Razer keyboards and mice
 emerge -av dev-python/fido2                               # FIDO2 / U2F security keys
+emerge -av dev-python/pyusb dev-python/cryptography       # Creative Sound Blaster
+emerge -av dev-python/pyusb dev-python/dbus-python        # 8BitDo Xbox controllers
 emerge -av app-crypt/yubikey-manager                      # YubiKey model, firmware, applications
 emerge -av dev-python/pytest dev-python/ruff              # development
 ```
@@ -182,7 +201,9 @@ hardware_ui/
 │   ├── fido2_security_keys/  vendor-neutral CTAP; a base for per-vendor modules
 │   ├── yubikeys/         extends the above with ykman; the worked example of `extends`
 │   ├── jabra_headsets/   ported GNP over hidraw, vendor catalogue, learned per-model limits
-│   └── logitech_peripherals/  HID++ through the vendored library; receivers expand to children
+│   ├── logitech_peripherals/  HID++ through the vendored library; receivers expand to children
+│   ├── creative_peripherals/  CDC-ACM control channel behind an AES-256-GCM unlock
+│   └── eightbitdo_controllers/  one 532-byte record over USB GIP or a hidden BLE radio
 ├── third_party/          Solaar, vendored GUI-free and reproducibly (see `tools/vendor_solaar.py`)
 └── cli.py                headless diagnostics; imports no Qt
 
@@ -218,6 +239,7 @@ cached, keyed on the device's advertised function list.
 
 | | |
 |---|---|
+| [CHANGELOG](CHANGELOG.md) | what changed in each release, and whether it affects you |
 | [PROJECT_STATE](PROJECT_STATE.md) | where things stand and what to pick up next |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | how it fits together and why |
 | [WRITING_A_MODULE](docs/WRITING_A_MODULE.md) | adding a device family |
@@ -227,6 +249,8 @@ cached, keyed on the device's advertised function list.
 | [POLY_UI_BEHAVIOUR](docs/POLY_UI_BEHAVIOUR.md) | the same for Poly Deckard — link discipline, id namespaces, the vendor-data decision |
 | [RAZER_UI_BEHAVIOUR](docs/RAZER_UI_BEHAVIOUR.md) | the same for Razer via OpenRazer — capability gating, DPI stages, macros, licensing |
 | [FIDO2_UI_BEHAVIOUR](docs/FIDO2_UI_BEHAVIOUR.md) | the same for CTAP security keys — PIN handling, gating, and the base-module design |
+| [EIGHTBITDO_UI_BEHAVIOUR](docs/EIGHTBITDO_UI_BEHAVIOUR.md) | the same for 8BitDo — why a save is a session rather than a record, the checksum seed, why BlueZ cannot do the Bluetooth path, and where the artwork came from |
+| [CREATIVE_UI_BEHAVIOUR](docs/CREATIVE_UI_BEHAVIOUR.md) | the same for Creative — the fourth transport, why there are no per-model tables, the unlock, and what is actually verified |
 | [YUBIKEY_UI_BEHAVIOUR](docs/YUBIKEY_UI_BEHAVIOUR.md) | the YubiKey specialisation — library choice, the match-rule trap, USB interface reclaim, application toggles, OTP slots, OATH accounts |
 | [PORT_DIVERGENCES](docs/PORT_DIVERGENCES.md) | where a port differs from its source, and why |
 
@@ -263,6 +287,8 @@ this table is untested, and the UI badges it as such rather than pretending othe
 | Dell WD22TB4 Thunderbolt dock | verified — read-only |
 | YubiKey 5 NFC | **verified** — information, self-test, PIN change, and listing the passkeys stored on it |
 | Any FIDO2 / U2F key | `family` — claimed by HID usage page 0xF1D0, no vendor id involved |
+| Creative Sound Blaster X4 | **EXPERIMENTAL** — exercised, not settled. Unlock, every read the page makes, and writes to routing, feature toggles, Super X-Fi and its mode, the equaliser and the card's four stored modes. The module is new and every session against it has found a bug; Audio Balance is missing entirely. Treat writes as an experiment |
+| 8BitDo Ultimate Wired Controller for Xbox | **EXPERIMENTAL** — exercised over USB, not settled. Read, remap, save and read-back, with the save confirmed to survive the cable coming out. Bluetooth sends the same save session but has never been run through this application. The module is new and every layer of it has had a correction found on hardware |
 | Dell P2425H, P2222H, P2422H, U2412M, P2319H, P2317H, P3424WE, P2725HE | verified in the source project |
 | Everything else in these families | `family` — badged as untested in the UI |
 

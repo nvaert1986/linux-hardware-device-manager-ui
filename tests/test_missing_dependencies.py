@@ -101,6 +101,10 @@ CASES = [
         "hardware_ui.modules.logitech_peripherals.device:LogitechDevice",
         {"pyudev"}, 0x046D, "pyudev", id="logitech-without-pyudev",
     ),
+    pytest.param(
+        "hardware_ui.modules.creative_peripherals.device:CreativeDevice",
+        {"usb"}, 0x041E, "pyusb", id="creative-without-pyusb",
+    ),
 ]
 
 

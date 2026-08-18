@@ -439,6 +439,145 @@ replacement, and the schedule has to come from the device rather than from a con
 
 ---
 
+## Creative module — written, not verified on hardware
+
+Ported from `plasma-creative-x4-protocol-soundcard-support`, which reverse-engineered the protocol
+against a Sound Blaster X4 and verified it there. **No Creative device has been attached to this
+machine**, so every match rule is `status = "family"` and stays that way until one has been opened
+through this shell. Spec: [`docs/CREATIVE_UI_BEHAVIOUR.md`](docs/CREATIVE_UI_BEHAVIOUR.md).
+
+26 capabilities on an X4-like device: eight feature toggles, output routing, Super X-Fi and its
+mode, the ten-band equaliser with preamp and presets, firmware and serial.
+
+**The one thing that is genuinely verified here** is the unlock. The port reproduces a
+challenge/response pair captured from real hardware, byte for byte — so the AES-256-GCM
+reconstruction (key patching, nonce placement, plaintext range) survived the port intact. Nothing
+else in the module has touched a device.
+
+### What the port kept, deliberately
+
+- **Both acknowledge landmines.** A Super X-Fi mode write draws two acknowledges — a failure for a
+  different op, then ours with status 0 — so a failure whose op is not ours must be ignored. And
+  for `SetMalcolmParameter` byte 0 is an entry count rather than an op, so that comparison must
+  never gate the *success* path; doing so made every equaliser write time out. Both pinned by tests
+  with the same capture bytes.
+- **`UPGRADE` (83) and `FACTORY_RESET` (155) refused** unless explicitly permitted. Neither is
+  exposed as a capability, so the guard is for a caller that does not exist yet.
+- **The Direct Mode interlock**, which is *ours* rather than Creative's — the vendor's Equalizer
+  module never references Direct Mode. Every equaliser row is gated through `requires` and an
+  advisory says why.
+
+### What changed in the port, and why
+
+- **No hardcoded ids.** The source targets one card and names its interfaces (1, 2) and endpoints
+  (`0x03`/`0x82`). Here the CDC-ACM function and its bulk endpoints are read from the descriptors,
+  because the module matches the whole vendor. Justified by `CTCDC.dll`, whose only per-model table
+  is a display-name lookup that does not contain the X4's own product id — the library talks to
+  whatever it is handed.
+- **`sync()` skips equaliser reads** when the device's `SubFeature` mask says it has none. On the
+  X4 that costs nothing; on a device without one it saves twelve reads timing out at 0.5 s each.
+- **The preset store is redirected** to `vendor_dir("creative_peripherals")`, the same redirection
+  the Logitech module applies to Solaar's config.
+- **`DependencyMissing` instead of `ImportError`.** The responder wraps a missing `cryptography` in
+  an `UnlockError` to keep the source's contract; the transport unwraps exactly that case, so a
+  missing package is never reported as a broken card. Narrow on purpose — a rejected challenge is
+  still a transport error.
+
+### Core changes this needed
+
+- **`discovery.enumerate_usb()` — the fourth transport.** Walks `/sys/bus/usb/devices` for devices
+  matching a signature in `_CONTROL_INTERFACES`; opens nothing. The filter is a list of exact
+  `(class, subclass, protocol)` triples rather than a class test, because enumerating every USB
+  device would fill the sidebar with hubs and webcams. Creative's entry is CDC-ACM; communications
+  interfaces that are not ACM (ethernet, ATM, OBEX) are skipped. The 8BitDo module later added GIP
+  as a second signature — see that module's section.
+- **`_one_row_per_usb_device()`** — a device exposing both a HID interface and a CDC channel is
+  found by both enumerators; hidraw wins, because its row carries an openable node, a device kind
+  and an icon, and the CDC channel is still reachable from the USB path both rows share.
+- **The first vendor-scoped udev rule.** Every other rule matches a node *type*; this one has to
+  name Creative (`041e`), because claiming a USB interface needs access to the USB device and an
+  unqualified `SUBSYSTEM=="usb"` rule would hand every USB device to the logged-in session.
+
+### Open
+
+1. **Everything above the unlock is untested on hardware.** Claiming the interfaces, the handshake
+   on the wire, whether a real device answers the feature and subfeature queries at all.
+2. **Does any Creative device expose hidraw?** The source project's udev rule carries a `hidraw`
+   clause alongside the USB one, which is a hint and not an answer. The manifest matches both
+   transports and the device opens CDC either way, so both outcomes work — but only one is real.
+3. **The host-side DSP is deliberately not carried.** X-Bass and Dialog Plus are PipeWire filter
+   chains hosted by child processes with their own JSON state file, because PipeWire has no
+   readback — roughly 1,400 lines with no analogue here. Carrying them would need write-only
+   capability support in core. Decided with the user: device-only for now, with the page saying so.
+4. **Not carried either:** `store_profile`/`select_profile` (writing curves into the card's own
+   slots) and the SBX / Scout Mode button writes. The button ids are in the vendor enum but the
+   Windows app never sends them, so they stay unexposed rather than guessed at.
+5. **Product codes still wanted** for importing presets on anything other than an X4: the folder
+   listing of `C:\ProgramData\Creative\CreativeApp\Product\`, whose names are the product codes
+   (`SB1815` is the X4).
+
+## 8BitDo Xbox controllers — ported, not yet run through this shell
+
+Ported from `~/Projects/8bitdo-cfg`, which decoded the protocol against an Ultimate Wired Controller
+for Xbox and was **hardware-validated over both transports** — USB (GIP) and the controller's hidden
+BLE config radio. Unlike Creative, the source work is proven; what is unproven is this port of it.
+Spec: [`docs/EIGHTBITDO_UI_BEHAVIOUR.md`](docs/EIGHTBITDO_UI_BEHAVIOUR.md).
+
+42 capability rows: profile selector, 19 remaps (17 inputs plus both back paddles), 11 toggles,
+8 sliders, reset and delete.
+
+### Verified here, with no controller attached
+
+- **The rolling checksum chain**, against four consecutive saves captured from the vendor app:
+  `0x3b6b → 0x43a0 → 0x8781 → 0xa9fd`, all three steps exact. The strongest evidence in the module.
+- **Record decoding**, against a captured profile and against real slot dumps of all three slot
+  states (unwritten, deleted, written).
+
+### Two bugs found during the port
+
+1. **`configure.py` had `PADDLE_R` at offset 124**, where `fieldmap.py` had 116. The captured record
+   settles it: 116 holds `0x8000` (RT), 120 holds `0x4000` (LT), and **124 is the second copy of the
+   `11 09 20 20` marker** — writing a paddle there corrupts the record. Fixed in the source project
+   as well as in the port.
+2. **My own `message.HEADER_LEN` was one byte wrong.** A request header is 17 bytes and a response
+   header 16, because the response's `u8` status replaces the request's `u16` field. The packing was
+   right and the constant was not; a test caught it.
+
+### Core changes this needed
+
+- **`enumerate_usb()` learned a second interface signature.** GIP is `0xFF/0x47/0xD0` and these
+  controllers expose no hidraw at all, so they were undiscoverable. Matched as the full triple —
+  class `0xFF` alone is what every dongle falls back to — and the matched names are reported in a
+  `control_interfaces` property. A GIP device is filed under INPUT with a gamepad icon.
+- **A second vendor-scoped udev rule** (`2dc8`), for the same reason as Creative's.
+
+### Decisions worth not re-litigating
+
+- **Matched on product id, not vendor id** — the opposite of Creative and Jabra, and deliberate.
+  There is no capability query: the byte offsets *are* the capability list, and 8BitDo's other
+  families use different records. A vendor-wide rule would write confident wrong offsets.
+- **The active profile is a readout.** Which profile is live is chosen with the controller's own
+  button; moving it from software changes the device under whoever is holding it.
+- **A write with no known checksum is refused, not guessed.** Over BLE the header is unreadable, so
+  the previous value comes from a USB read or from what this application last wrote, cached in
+  `store.py`. Plug in once, then use Bluetooth indefinitely.
+- **Raw ATT rather than BlueZ** for the BLE path. The controller refuses the notify CCCD write and
+  notifies anyway; BlueZ treats the refusal as fatal and delivers nothing. Not a bug in BlueZ, and
+  not fixable from its API.
+- **Original artwork.** 8BitDo's renders cannot be redistributed, so the controller drawing is ours,
+  measured from product photos rather than traced. Anchors are read out of the SVG, which is what
+  fixes the source's overlapping dropdowns.
+
+### Open
+
+1. **Nothing in this port has touched a controller.** Both transports, the profile switching, the
+   commit — all unexercised through this shell.
+2. **The BLE scan action is not wired into the shell yet.** `transport.ble.scan()` exists and is
+   deliberately not called during enumeration; the sidebar has no button for it.
+3. **Only `2dc8:2002` is claimed.** Other Xbox wired models in the family very likely share the
+   record, but "very likely" is not evidence — `GUI_TODO.md` §6 in the source sketches a guided
+   capture-diff script for adding one.
+
 ## Settled — kept for the reasoning
 
 **Modules page — built and verified 2026-08-11.** `shell/modules_page.py`, opened from a button

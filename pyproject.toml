@@ -5,7 +5,7 @@
 
 [project]
 name = "hardware-ui"
-version = "0.10"
+version = "0.10.1"
 description = "One uniform interface for configuring USB and Bluetooth hardware on Linux"
 requires-python = ">=3.13"
 license = "GPL-3.0-or-later"

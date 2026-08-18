@@ -50,6 +50,30 @@ vendor_id = "046d"
 name_glob = "*MX Keys S*"
 status = "verified"
 
+# The same device seen by BlueZ rather than by hidraw.
+#
+# **This rule is not how the device gets configured.** A Logitech mouse paired directly over
+# Bluetooth appears twice: as a hidraw node, which is the row that opens and carries HID++, and as
+# a BlueZ device. `discovery._one_row_per_device` drops the BlueZ duplicate whenever the hidraw
+# node exists, so this rule only ever produces a visible row when the mouse is **switched off** --
+# at which point the hidraw node is gone and BlueZ is the only thing that still remembers the
+# device.
+#
+# That is the entire purpose: without it a mouse switched off does not move to "Disconnected
+# devices", it vanishes from the list altogether, because an unclaimed row is never rendered. The
+# Sony and Poly modules get this for free by matching Bluetooth in the first place; Logitech
+# matched only hidraw, so it had nothing to fall back on.
+#
+# Matched on Logitech's own vendor GATT service rather than on a name, because the last four hex
+# digits of that UUID are Logitech's vendor id -- it is as specific as a vendor id and it is what
+# the device itself advertises. A Bluetooth speaker or headset from Logitech does not carry it, so
+# this cannot claim a device the module has no business with. `family`, because a row that only
+# ever appears while the device is unreachable is not one anybody can test against.
+[[match]]
+transport = "bluetooth"
+uuid = "00010000-0000-1000-8000-011f2000046d"
+status = "family"
+
 # The protocol, the per-model feature tables and every setting definition come from Solaar,
 # vendored under hardware_ui/third_party. Nothing is downloaded at runtime and there is no vendor
 # data to import -- see tools/vendor_solaar.py.

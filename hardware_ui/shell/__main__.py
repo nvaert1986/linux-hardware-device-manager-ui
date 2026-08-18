@@ -22,6 +22,7 @@ from hardware_ui.core import ModuleRegistry
 
 from .app import Controller
 from .asyncbridge import AsyncBridge
+from .tray import Tray
 from .window import MainWindow
 
 ICON_FILE = Path(__file__).parent / "icon" / "hardware-ui.svg"
@@ -57,8 +58,8 @@ def main(argv: list[str] | None = None) -> int:
     # Breeze supplies the palette, metrics and every control. Nothing to theme by hand.
     QIcon.setFallbackThemeName("breeze")
 
-    registry = ModuleRegistry.discover()
     log = logging.getLogger(__name__)
+    registry = ModuleRegistry.discover()
     log.info("discovered %d module(s): %s", len(registry), ", ".join(m.id for m in registry))
 
     bridge = AsyncBridge()
@@ -68,6 +69,12 @@ def main(argv: list[str] | None = None) -> int:
     controller = Controller(registry, bridge, window)
     controller.paint_from_cache()
     window.show()
+
+    # After show(), so the window exists to be hidden and re-shown. Returns None where the desktop
+    # has no tray, and then nothing about closing the window changes.
+    tray = Tray.attach(window)
+    if tray is not None:
+        log.info("system tray icon installed; closing the window leaves it running")
 
     def _quit() -> None:
         # Wait for it. `submit` only schedules, and `stop` cancels every pending task -- including

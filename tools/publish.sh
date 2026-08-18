@@ -45,11 +45,23 @@ echo "publishing $name -> $destination"
 # --delete-excluded extends that to the excluded patterns, which matters because the verification
 # below runs pytest *inside* the copy and leaves __pycache__ behind. Without it, every re-run
 # inherits the last run's build droppings and reports a file count that is not the project's.
+#
+# `protect .git/` is not optional, and the reason is worth spelling out because getting it wrong is
+# silent and unrecoverable. The destination is where publishing actually happens: someone runs
+# `git init` there, adds a remote, commits. That `.git/` matches --exclude, and --delete-excluded
+# deletes what it matches *on the receiving side* -- so without a protect rule, the next publish
+# would take the repository's history, its remote and its branches with it. A protect rule exempts
+# a path from deletion without transferring it, which is exactly the distinction wanted here: the
+# source's own `.git/` is still never copied.
 mkdir -p "$destination"
-rsync -a --delete --delete-excluded "${excludes[@]}" --exclude='.git/' "$root"/ "$destination"/
+rsync -a --delete --delete-excluded --filter='protect .git/' \
+      "${excludes[@]}" --exclude='.git/' "$root"/ "$destination"/
 
+# Counted without `.git/`, which is the repository rather than the project: including it would
+# make the published tree appear to grow with every commit made in it.
 printf '  %s files, %s\n' \
-    "$(find "$destination" -type f | wc -l)" "$(du -sh "$destination" | cut -f1)"
+    "$(find "$destination" -path "$destination/.git" -prune -o -type f -print | wc -l)" \
+    "$(du -sh --exclude=.git "$destination" | cut -f1)"
 
 # ---------------------------------------------------------------- what must not have come along
 #
@@ -72,7 +84,8 @@ printf '  %s files, %s\n' \
 # meant to protect. Everything else is refused: prose that wants to credit someone can name them
 # and point at the notice file, which is where the authoritative copy lives anyway.
 strays="$(find "$destination" \( -name properties.json -o -name '*.asar' -o -name '*.msi' \
-                                 -o -name DeviceSettings.zip \) -print)"
+                                 -o -name DeviceSettings.zip -o -name presets.json \
+                                 -o -name device.png \) -print)"
 if [[ -n $strays ]]; then
     echo "  REFUSING: vendor data that is not ours to redistribute:" >&2
     printf '%s\n' "$strays" | sed 's/^/    /' >&2
@@ -84,10 +97,16 @@ fi
 # A home directory path is refused everywhere. No licence, no notice and no upstream source file
 # has any business containing one, so there is nothing to carve out -- and carving one out is how a
 # real leak hides inside a file named LICENSE.
+#
+# `.git/` is skipped by both scans. Not an exemption for content -- it is not content. Once the
+# destination is a real repository, its logs and reflog carry the committer's address by design,
+# and every object in it is a compressed copy of files these scans already read in the working
+# tree. Scanning it flags the author of the commits for being the author of the commits.
 home='/home/[a-z][a-z0-9_-]*'
 leaks=()
 while IFS= read -r file; do leaks+=("$file"); done < <(
-    grep -rIlE "$home" --exclude-dir=third_party "$destination" 2>/dev/null || true)
+    grep -rIlE "$home" --exclude-dir=third_party --exclude-dir=.git "$destination" 2>/dev/null \
+        || true)
 
 # An email address is refused too, but licence, notice and provenance files exist precisely to
 # carry other people's names and addresses. Refusing to publish an upstream copyright line because
@@ -101,7 +120,7 @@ while IFS= read -r file; do
     if grep -hE "$mail" "$file" | grep -qvE 'example\.(com|org|net)'; then
         leaks+=("$file")
     fi
-done < <(grep -rIlE "$mail" --exclude-dir=third_party \
+done < <(grep -rIlE "$mail" --exclude-dir=third_party --exclude-dir=.git \
              --exclude='LICENSE*' --exclude='COPYING*' --exclude='AUTHORS*' \
              --exclude='NOTICE*' --exclude='PROVENANCE*' "$destination" 2>/dev/null || true)
 

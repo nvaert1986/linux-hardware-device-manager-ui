@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 760" width="1000" height="760">
+  <!--
+    Schematic of an 8BitDo Ultimate Wired Controller for Xbox, drawn for this project.
+
+    Original line art, not a traced photograph, and the difference is the whole point: the
+    vendor's own renders are theirs and cannot be redistributed, whereas where the buttons sit
+    is a fact about the hardware. Every path here is drawn; only the coordinates are measured.
+
+    HOW THE GEOMETRY WAS OBTAINED, so it can be checked or redone:
+
+      * Shell outline: thresholded from two product photos independently (the black unit against
+        white, and the white unit at a high threshold). Both agree on a body bounding box of
+        x 58..741, y 240..726, widest at the grips rather than at the top, with the grips
+        separating at y 570 and ending at y 715.
+      * Sticks, d-pad and face buttons: connected-component centroids of the dark controls on
+        the white unit. Face buttons 48 px across, sticks 117, d-pad 119.
+      * Centre cluster: read off a 3x magnified crop with a 20 px grid, because those buttons are
+        white on a white shell and no threshold separates them.
+      * Everything then mapped by ONE uniform transform into this viewBox:
+            svg = (60, 90) + (photo - (58, 240)) * 1.2884
+        so the layout is metrically faithful. Symmetric features are snapped to x=500 exactly,
+        control points included, so the silhouette cannot come out lopsided.
+
+    Line art on no background, deliberately. The vendor art is baked-light and ships a separate
+    77 kB shadow asset to gain definition on a pale theme; one mid-grey stroke reads on both.
+
+    Every configurable control carries id="anchor-KEY", where KEY is the capability key the UI
+    binds to. The leader lines are read out of this file rather than measured against it, which is
+    what fixes the overlapping-dropdown bug: the art and the coordinates now have one source.
+
+    **This view holds only what a front view can honestly show.** The shoulders and triggers live in
+    controller-top.svg and the back paddles in controller-back.svg. Drawing them here was the
+    original mistake: LB and RB are barely a sliver from the face, LT and RT are invisible behind
+    them, and the paddles sit directly behind the D-pad and the right stick. Every attempt to place
+    them on this view either floated free of the shell or collided with a control in front of them.
+
+    Note for editors: XML forbids a double hyphen inside a comment. Use an em dash.
+  -->
+  <defs>
+    <style>
+      .body   { fill: none;    stroke: #7d838d; stroke-width: 5; stroke-linejoin: round; }
+      .part   { fill: none;    stroke: #7d838d; stroke-width: 4; }
+      .thin   { fill: none;    stroke: #7d838d; stroke-width: 3; stroke-linecap: round; }
+      .fillet { fill: #7d838d; fill-opacity: .10; stroke: #7d838d; stroke-width: 4; }
+      .mark   { fill: #7d838d; fill-opacity: .60; stroke: none; }
+      /* The guide button is a glossy black sphere; a filled disc is what reads at any size. */
+      .disc   { fill: #7d838d; fill-opacity: .55; stroke: #7d838d; stroke-width: 4; }
+      .led    { fill: #7d838d; fill-opacity: .40; stroke: none; }
+      .face   { stroke-width: 4; fill-opacity: .18; }
+      .letter { font-family: sans-serif; font-size: 30px; font-weight: 700; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <!-- USB-C cable exit, top centre -->
+  <path class="part" d="M 500,92 v -42"/>
+  <rect class="fillet" x="484" y="18" width="32" height="26" rx="6"/>
+
+  <!-- ======================================================= body
+       Widest at the grips, not at the shoulders, which is what the measurement showed and what
+       an earlier by-eye attempt got backwards. -->
+  <path class="body" d="M 500,90
+    C 630,90 745,100 817,118
+    C 872,132 908,180 922,260
+    C 936,340 942,460 936,552
+    C 930,630 906,676 862,700
+    C 826,720 792,700 762,660
+    C 730,616 700,560 690,530
+    C 640,514 570,510 500,510
+    C 430,510 360,514 310,530
+    C 300,560 270,616 238,660
+    C 208,700 174,720 138,700
+    C 94,676 70,630 64,552
+    C 58,460 64,340 78,260
+    C 92,180 128,132 183,118
+    C 255,100 370,90 500,90 Z"/>
+
+  <!-- ======================================================= sticks
+       Asymmetric by design on this layout: the left stick sits high, the right one low. Two
+       rings each, the recessed well and the thumb cap inside it. -->
+  <g id="anchor-L3">
+    <circle class="part" cx="228" cy="274" r="75"/>
+    <circle class="fillet" cx="228" cy="274" r="52"/>
+  </g>
+  <g id="anchor-R3">
+    <circle class="part" cx="609" cy="420" r="75"/>
+    <circle class="fillet" cx="609" cy="420" r="52"/>
+  </g>
+
+  <!-- ======================================================= d-pad
+       The moulded direction triangles double as the four anchors, so each direction's leader
+       line lands on its own arm instead of all four meeting in the middle. -->
+  <path class="part" d="M 342,332 h 70 v 41 h 41 v 70 h -41 v 41 h -70 v -41 h -41 v -70 h 41 Z"/>
+  <path id="anchor-DPAD_UP"    class="mark" d="M 377,344 l 9,13 h -18 Z"/>
+  <path id="anchor-DPAD_DOWN"  class="mark" d="M 377,472 l 9,-13 h -18 Z"/>
+  <path id="anchor-DPAD_LEFT"  class="mark" d="M 313,408 l 13,9 v -18 Z"/>
+  <path id="anchor-DPAD_RIGHT" class="mark" d="M 441,408 l -13,9 v -18 Z"/>
+
+  <!-- ======================================================= centre cluster
+       Guide button: not configurable, but drawn, because a gap where it belongs reads as an
+       error in the diagram. A **filled dark disc and nothing inside it**, which is what the real
+       button looks like at a glance — a glossy black sphere. An earlier version drew an outline
+       with a thin X through it, meaning to suggest the logo without copying it; it read as a
+       "close" symbol sitting on top of the controller. The logo itself is Microsoft's and is not
+       reproduced. Measured: photo centre x=400, diameter 56. -->
+  <circle class="disc" cx="500" cy="191" r="36"/>
+
+  <!-- Three circles in a row. The outer two are View and Menu; the middle one is 8BitDo's pair
+       button, which the config record has no entry for, so it gets no anchor.
+
+       Radius 20, not 32. The first attempt read the radius off a magnified crop by eye and got it
+       about half again too big, so the three buttons very nearly touched — nothing like the real
+       thing, which has clear gaps. Re-measured from the rims in an intensity profile across the
+       row: photo diameters 28-32 px, centres 347 / 400 / 454. The middle one sits directly below
+       the guide, which is the check that the row is placed right. -->
+  <circle id="anchor-VIEW" class="fillet" cx="432" cy="260" r="20"/>
+  <circle class="fillet" cx="500" cy="260" r="20"/>
+  <circle id="anchor-MENU" class="fillet" cx="568" cy="260" r="20"/>
+  <g class="thin">
+    <rect x="424" y="253" width="10" height="8" rx="2"/>
+    <rect x="428" y="257" width="10" height="8" rx="2"/>
+    <path d="M 560,255 h 14 M 560,260 h 14 M 560,265 h 14"/>
+  </g>
+
+  <!-- Star / profile button: the upper of the two pills, which is where the source project
+       anchored it (0.435 of body height). The lower pill is the share button, which the config
+       record has no entry for either. -->
+  <rect id="anchor-STAR" class="fillet" x="464" y="322" width="68" height="45" rx="21"/>
+  <rect class="fillet" x="464" y="460" width="68" height="45" rx="21"/>
+  <path class="thin" d="M 498,336 v 17 M 490,340 l 16,9 M 506,340 l -16,9"/>
+
+  <!-- Profile indicator LEDs: three, one per stored config slot. -->
+  <circle class="led" cx="500" cy="389" r="6"/>
+  <circle class="led" cx="500" cy="409" r="6"/>
+  <circle class="led" cx="500" cy="429" r="6"/>
+
+  <!-- ======================================================= face buttons
+       Colours follow the layout's long-standing convention, muted so they hold up on a dark
+       theme. Functional, not decorative: it is how anyone finds A versus B at a glance. -->
+  <circle id="anchor-Y" class="face" cx="752" cy="205" r="31" stroke="#d1a63f" fill="#d1a63f"/>
+  <circle id="anchor-X" class="face" cx="691" cy="268" r="31" stroke="#4a86c8" fill="#4a86c8"/>
+  <circle id="anchor-B" class="face" cx="817" cy="270" r="31" stroke="#cc4b4b" fill="#cc4b4b"/>
+  <circle id="anchor-A" class="face" cx="753" cy="333" r="31" stroke="#6aa84f" fill="#6aa84f"/>
+  <text class="letter" x="752" y="216" fill="#d1a63f">Y</text>
+  <text class="letter" x="691" y="279" fill="#4a86c8">X</text>
+  <text class="letter" x="817" y="281" fill="#cc4b4b">B</text>
+  <text class="letter" x="753" y="344" fill="#6aa84f">A</text>
+
+</svg>

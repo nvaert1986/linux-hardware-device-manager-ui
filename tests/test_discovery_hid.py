@@ -436,3 +436,341 @@ def test_stopping_without_having_started_is_harmless(qapp):
     from hardware_ui.shell.bluetooth import BluetoothWatcher
 
     BluetoothWatcher().stop()
+
+
+# --------------------------------------------------------------------------- raw USB
+#
+# The fourth transport, and the only one with no kernel-provided character device to open: a
+# vendor protocol tunnelled through CDC has to be claimed with libusb. Enumeration still opens
+# nothing -- interface classes are sysfs attributes, read as files.
+
+
+def usb_tree(root, name, *, vendor="041e", product_id="3278", interfaces=(), **attrs):
+    """`product_id` is the hex idProduct; a `product=` keyword lands in **attrs as the *string*
+    sysfs exposes, which is what the name is built from."""
+    """One USB device directory with the interface children a real one would have."""
+    device = root / name
+    device.mkdir(parents=True)
+    (device / "idVendor").write_text(vendor + "\n")
+    (device / "idProduct").write_text(product_id + "\n")
+    (device / "bNumInterfaces").write_text(f"{len(interfaces):2d}\n")
+    for key, value in attrs.items():
+        (device / key).write_text(value + "\n")
+    for index, signature in enumerate(interfaces):
+        klass, subclass = signature[0], signature[1]
+        protocol = signature[2] if len(signature) > 2 else 0x00
+        iface = device / f"{name}:1.{index}"
+        iface.mkdir()
+        (iface / "bInterfaceClass").write_text(f"{klass:02x}\n")
+        (iface / "bInterfaceSubClass").write_text(f"{subclass:02x}\n")
+        (iface / "bInterfaceProtocol").write_text(f"{protocol:02x}\n")
+    return device
+
+
+CDC_ACM = (0x02, 0x02, 0x01)
+CDC_DATA = (0x0A, 0x00, 0x00)
+AUDIO = (0x01, 0x01, 0x00)
+HID = (0x03, 0x00, 0x00)
+#: Xbox Game Input Protocol: a vendor-specific class with a fixed subclass and protocol. 8BitDo's
+#: Xbox controllers expose this and no hidraw at all.
+GIP = (0xFF, 0x47, 0xD0)
+#: A plain vendor-specific interface, which is what most dongles fall back to. Must NOT qualify.
+VENDOR_OTHER = (0xFF, 0x00, 0x00)
+
+
+def test_a_device_with_a_cdc_control_channel_is_enumerated(tmp_path, monkeypatch):
+    monkeypatch.setattr(discovery, "SYS_USB", tmp_path)
+    usb_tree(tmp_path, "3-1", interfaces=(AUDIO, CDC_ACM, CDC_DATA),
+             manufacturer="Creative Technology Ltd", product="Sound Blaster X4", serial="SB-1")
+
+    found = discovery.enumerate_usb()
+    assert len(found) == 1
+    device = found[0]
+    assert device.transport is discovery.Transport.USB
+    assert (device.vendor_id, device.product_id) == (0x041E, 0x3278)
+    # The uid keys settings and the capability cache, so it follows the serial rather than the
+    # sysfs path -- moving the card to another port must not orphan its configuration.
+    assert device.uid == "usb:SB-1"
+    assert device.category is discovery.Category.AUDIO
+
+
+def test_a_device_without_one_is_left_out_of_the_sidebar(tmp_path, monkeypatch):
+    """The filter is the point. Enumerating every USB device would fill the list with hubs,
+    webcams and card readers, and the list is the product."""
+    monkeypatch.setattr(discovery, "SYS_USB", tmp_path)
+    usb_tree(tmp_path, "3-1", vendor="1d6b", product_id="0003", interfaces=(HID,), product="hub")
+    assert discovery.enumerate_usb() == []
+
+
+def test_a_communications_device_that_is_not_acm_is_not_claimed(tmp_path, monkeypatch):
+    """Class 0x02 also covers ethernet, ATM and OBEX functions. A network adapter is somebody
+    else's business."""
+    monkeypatch.setattr(discovery, "SYS_USB", tmp_path)
+    usb_tree(tmp_path, "3-1", interfaces=((0x02, 0x06), (0x0A, 0x00)))   # 0x06 == ECM
+    assert discovery.enumerate_usb() == []
+
+
+def test_a_serialless_device_falls_back_to_its_bus_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(discovery, "SYS_USB", tmp_path)
+    usb_tree(tmp_path, "3-1.4", interfaces=(CDC_ACM, CDC_DATA), product="Widget")
+    assert discovery.enumerate_usb()[0].uid == "usb:3-1.4"
+
+
+def test_an_interface_directory_is_never_mistaken_for_a_device(tmp_path, monkeypatch):
+    """`3-1` is a device and `3-1:1.0` is one of its interfaces. Only devices carry idVendor, so
+    the attribute is the test rather than the name shape."""
+    monkeypatch.setattr(discovery, "SYS_USB", tmp_path)
+    usb_tree(tmp_path, "3-1", interfaces=(CDC_ACM, CDC_DATA))
+    assert len(discovery.enumerate_usb()) == 1
+
+
+def test_a_missing_usb_tree_is_not_an_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(discovery, "SYS_USB", tmp_path / "nowhere")
+    assert discovery.enumerate_usb() == []
+
+
+def test_one_row_per_device_when_hidraw_saw_it_too():
+    """A device can expose both a HID interface and a CDC channel, and each enumerator finds it
+    independently. hidraw wins: its row carries an openable node, a device kind and an icon, and
+    a module needing the CDC channel can still find it from the USB path both rows share."""
+    from hardware_ui.core.device import DeviceInfo, Transport
+
+    hid_row = DeviceInfo(uid="hid:x", name="Card", transport=Transport.HID,
+                         properties={"usb": "3-1"})
+    usb_row = DeviceInfo(uid="usb:x", name="Card", transport=Transport.USB, path="/sys/.../3-1")
+    other = DeviceInfo(uid="usb:y", name="Other", transport=Transport.USB, path="/sys/.../3-2")
+
+    kept = discovery._one_row_per_device([hid_row, usb_row, other])
+    assert [d.uid for d in kept] == ["hid:x", "usb:y"]
+
+
+# --------------------------------------------------------------------------- GIP
+#
+# 8BitDo's Xbox controllers speak the Xbox Game Input Protocol on a vendor-specific interface and
+# expose **no hidraw at all**, so without this signature they are invisible to every transport
+# here. The signature is matched as a full (class, subclass, protocol) triple on purpose: class
+# 0xFF alone is what every dongle in the world falls back to.
+
+
+def test_a_gip_controller_is_enumerated(tmp_path, monkeypatch):
+    monkeypatch.setattr(discovery, "SYS_USB", tmp_path)
+    usb_tree(tmp_path, "1-4", vendor="2dc8", product_id="2002", interfaces=(GIP,),
+             manufacturer="8BitDo", product="8BitDo Ultimate Wired Controller for Xbox",
+             serial="B1-0001")
+
+    found = discovery.enumerate_usb()
+    assert len(found) == 1
+    assert (found[0].vendor_id, found[0].product_id) == (0x2DC8, 0x2002)
+    # The matched signature is reported so a manifest can ask for the transport it speaks rather
+    # than re-reading sysfs.
+    assert found[0].properties["control_interfaces"] == "gip"
+    # The interface says what the device is: nothing but an Xbox controller speaks GIP, so it
+    # belongs under INPUT with a gamepad icon rather than landing in OTHER.
+    assert found[0].category is discovery.Category.INPUT
+    assert found[0].icon_name == "input-gaming"
+
+
+def test_a_cdc_device_is_not_assumed_to_be_a_controller(tmp_path, monkeypatch):
+    """CDC-ACM says nothing about what the device is, so it falls through to the audio sniff."""
+    monkeypatch.setattr(discovery, "SYS_USB", tmp_path)
+    usb_tree(tmp_path, "3-1", interfaces=(AUDIO, CDC_ACM, CDC_DATA), product="Sound Blaster X4")
+    found = discovery.enumerate_usb()[0]
+    assert found.category is discovery.Category.AUDIO
+    assert found.icon_name == ""
+
+
+def test_a_plain_vendor_specific_interface_does_not_qualify(tmp_path, monkeypatch):
+    """The whole point of matching the triple. A wireless dongle claiming class 0xFF is not
+    something this application can talk to, and admitting it would fill the sidebar."""
+    monkeypatch.setattr(discovery, "SYS_USB", tmp_path)
+    usb_tree(tmp_path, "1-4", vendor="0bda", product_id="8153", interfaces=(VENDOR_OTHER,))
+    assert discovery.enumerate_usb() == []
+
+
+def test_a_device_offering_both_signatures_reports_both(tmp_path, monkeypatch):
+    monkeypatch.setattr(discovery, "SYS_USB", tmp_path)
+    usb_tree(tmp_path, "1-4", interfaces=(GIP, CDC_ACM, CDC_DATA))
+    assert discovery.enumerate_usb()[0].properties["control_interfaces"] == "cdc-acm,gip"
+
+
+def test_an_interface_missing_its_protocol_attribute_still_matches_cdc(tmp_path, monkeypatch):
+    """Real sysfs always provides all three, but losing a whole interface because one file could
+    not be read would hide the device silently. CDC-ACM does not care about protocol, so it must
+    still match; GIP does care, so it must not."""
+    monkeypatch.setattr(discovery, "SYS_USB", tmp_path)
+    device = usb_tree(tmp_path, "1-4", interfaces=(CDC_ACM, CDC_DATA))
+    for iface in device.glob("1-4:*"):
+        (iface / "bInterfaceProtocol").unlink()
+
+    found = discovery.enumerate_usb()
+    assert len(found) == 1
+    assert found[0].properties["control_interfaces"] == "cdc-acm"
+
+
+def test_an_interface_with_no_readable_class_is_skipped(tmp_path, monkeypatch):
+    monkeypatch.setattr(discovery, "SYS_USB", tmp_path)
+    device = usb_tree(tmp_path, "1-4", interfaces=(GIP,))
+    (device / "1-4:1.0" / "bInterfaceClass").write_text("\n")
+    assert discovery.enumerate_usb() == []
+
+
+# --------------------------------------------------------------------------- Bluetooth HID
+#
+# A mouse or keyboard paired directly over Bluetooth is both a BlueZ device and a hidraw node, and
+# neither enumerator knows about the other. Two bugs came out of that, both seen on a real
+# MX Master 3S.
+
+
+def bluetooth_hid_node(root, name="Logitech MX Master 3S", uniq="de:d7:4b:fc:27:ea",
+                       product="b034", descriptor=None):
+    """A hidraw node with HID_ID bus 0005 and, crucially, **no USB parent at all**."""
+    hidraw = root / "class" / "hidraw"
+    hidraw.mkdir(parents=True, exist_ok=True)
+    hid = root / "bt" / f"0005:046D:{product.upper()}.0009"
+    hid.mkdir(parents=True, exist_ok=True)
+    (hid / "uevent").write_text(
+        f"HID_ID=0005:0000046D:0000{product.upper()}\nHID_NAME={name}\nHID_UNIQ={uniq}\n")
+    if descriptor is not None:
+        (hid / "report_descriptor").write_bytes(descriptor)
+    node = hidraw / "hidraw15"
+    node.mkdir(exist_ok=True)
+    (node / "device").symlink_to(hid)
+    return hidraw
+
+
+#: The real opening bytes of an MX Master 3S's Bluetooth report descriptor, read off the device:
+#: Usage Page Generic Desktop, Usage Mouse, Collection Application, Report ID 2, Usage Pointer,
+#: Collection Physical.
+MOUSE_DESCRIPTOR = bytes.fromhex("0501 0902 a101 8502 0901 a100".replace(" ", ""))
+KEYBOARD_DESCRIPTOR = bytes.fromhex("0501 0906 a101 8501".replace(" ", ""))
+
+
+def test_a_bluetooth_mouse_is_classified_from_its_own_descriptor(tmp_path, monkeypatch):
+    """`_hid_kind` reads the USB interface protocol byte, and a Bluetooth device has no USB
+    interface -- so the mouse got no kind, no icon, and a category guessed from whether its name
+    happened to contain the word "mouse". "Logitech MX Master 3S" does not, so it landed in OTHER
+    with the generic peripherals icon."""
+    monkeypatch.setattr(discovery, "SYS_HIDRAW",
+                        bluetooth_hid_node(tmp_path, descriptor=MOUSE_DESCRIPTOR))
+    found = discovery.enumerate_hid()
+    assert len(found) == 1
+    assert found[0].properties["hid_kind"] == "mouse"
+    assert found[0].category is discovery.Category.INPUT
+    assert found[0].icon_name == "input-mouse"
+
+
+def test_a_bluetooth_keyboard_is_classified_too(tmp_path, monkeypatch):
+    monkeypatch.setattr(discovery, "SYS_HIDRAW",
+                        bluetooth_hid_node(tmp_path, name="MX Keys S",
+                                           descriptor=KEYBOARD_DESCRIPTOR))
+    found = discovery.enumerate_hid()
+    assert found[0].properties["hid_kind"] == "keyboard"
+    assert found[0].icon_name == "input-keyboard"
+
+
+def test_a_device_with_no_readable_descriptor_is_not_a_crash(tmp_path, monkeypatch):
+    monkeypatch.setattr(discovery, "SYS_HIDRAW", bluetooth_hid_node(tmp_path))
+    assert discovery.enumerate_hid()[0].properties["hid_kind"] == ""
+
+
+def test_only_top_level_usages_count(tmp_path, monkeypatch):
+    """A keyboard usage *inside* a mouse's collection must not reclassify it. Descriptors nest
+    pointers, buttons and wheels inside collections, and taking usages from in there would pick up
+    whatever appeared first."""
+    nested = (bytes.fromhex("0501")            # Usage Page: Generic Desktop
+              + bytes.fromhex("0902")          # Usage: Mouse            (top level)
+              + bytes.fromhex("a101")          # Collection
+              + bytes.fromhex("0906")          # Usage: Keyboard         (inside -- ignore)
+              + bytes.fromhex("c0"))           # End Collection
+    monkeypatch.setattr(discovery, "SYS_HIDRAW",
+                        bluetooth_hid_node(tmp_path, descriptor=nested))
+    assert discovery.enumerate_hid()[0].properties["hid_kind"] == "mouse"
+
+
+def test_the_bluez_duplicate_of_a_bluetooth_mouse_is_dropped():
+    """The consequential one. Every Logitech mouse paired over Bluetooth produced a working,
+    claimed hidraw row *and* an unclaimed BlueZ row reading "no module" -- one mouse, two entries,
+    one a dead end. Matched on the address, which hidraw reports as HID_UNIQ and BlueZ in a
+    different case."""
+    from hardware_ui.core.device import DeviceInfo, Transport
+
+    hid_row = DeviceInfo(uid="hid:de:d7:4b:fc:27:ea", name="Logitech MX Master 3S",
+                         transport=Transport.HID, address="de:d7:4b:fc:27:ea",
+                         module_id="logitech_peripherals")
+    bluez_row = DeviceInfo(uid="bt:DE:D7:4B:FC:27:EA", name="MX Master 3S",
+                           transport=Transport.BLUETOOTH, address="DE:D7:4B:FC:27:EA")
+
+    kept = discovery._one_row_per_device([hid_row, bluez_row])
+    assert [d.uid for d in kept] == ["hid:de:d7:4b:fc:27:ea"]
+
+
+def test_a_bluetooth_headset_keeps_its_only_row():
+    """Audio is untouched: a headset has no hidraw node, so nothing matches its address."""
+    from hardware_ui.core.device import DeviceInfo, Transport
+
+    mouse = DeviceInfo(uid="hid:aa", name="mouse", transport=Transport.HID, address="AA:AA")
+    headset = DeviceInfo(uid="bt:BB", name="WH-1000XM4", transport=Transport.BLUETOOTH,
+                         address="BB:BB")
+    kept = discovery._one_row_per_device([mouse, headset])
+    assert {d.uid for d in kept} == {"hid:aa", "bt:BB"}
+
+
+def test_a_dongle_without_a_hid_uniq_never_swallows_a_headset_row():
+    """A Poly headset reached through its USB dongle keeps both rows: the dongle's node carries no
+    HID_UNIQ, so its empty address must not match the headset's."""
+    from hardware_ui.core.device import DeviceInfo, Transport
+
+    dongle = DeviceInfo(uid="hid:x", name="Poly BT700", transport=Transport.HID, address="")
+    headset = DeviceInfo(uid="bt:CC", name="Poly V4320", transport=Transport.BLUETOOTH,
+                         address="CC:CC")
+    kept = discovery._one_row_per_device([dongle, headset])
+    assert {d.uid for d in kept} == {"hid:x", "bt:CC"}
+
+
+def test_bluez_supplies_the_icon_and_category_it_already_knows(monkeypatch):
+    """BlueZ derives a freedesktop icon name from the Class of Device or the BLE Appearance
+    characteristic, and it is better evidence than a name regex: a real MX Master 3S reports
+    `input-mouse`, while the string "MX Master 3S" contains no word the guess could have matched.
+    """
+    import subprocess
+
+    from hardware_ui.core.device import Category
+
+    listing = "Device DE:D7:4B:FC:27:EA MX Master 3S\nDevice AC:80:0A:C5:13:01 WH-1000XM4\n"
+    info = {
+        "DE:D7:4B:FC:27:EA": "\tConnected: no\n\tAppearance: 0x03c2 (962)\n\tIcon: input-mouse\n",
+        "AC:80:0A:C5:13:01": "\tConnected: yes\n\tIcon: audio-headset\n",
+    }
+
+    def fake_run(cmd, *a, **k):
+        if "devices" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=listing, stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout=info[cmd[-1]], stderr="")
+
+    import unittest.mock
+
+    with unittest.mock.patch.object(subprocess, "run", fake_run):
+        rows = {d.name: d for d in discovery._enumerate_bluetooth_cli()}
+
+    assert rows["MX Master 3S"].icon_name == "input-mouse"
+    assert rows["MX Master 3S"].category is Category.INPUT
+    assert rows["WH-1000XM4"].icon_name == "audio-headset"
+    assert rows["WH-1000XM4"].category is Category.AUDIO
+
+
+def test_a_device_bluez_has_no_icon_for_falls_back_to_the_name_guess(monkeypatch):
+    import subprocess
+    import unittest.mock
+
+    from hardware_ui.core.device import Category
+
+    listing = "Device AA:BB:CC:DD:EE:01 Some Wireless Keyboard\n"
+    def fake_run(cmd, *a, **k):
+        if "devices" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=listing, stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="\tConnected: no\n", stderr="")
+
+    with unittest.mock.patch.object(subprocess, "run", fake_run):
+        row = discovery._enumerate_bluetooth_cli()[0]
+    assert row.icon_name == ""
+    assert row.category is Category.INPUT      # from the word "Keyboard"

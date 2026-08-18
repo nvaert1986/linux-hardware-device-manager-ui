@@ -35,6 +35,11 @@ properties.json
 DeviceSettings.zip
 *.msi
 *.asar
+# Creative's factory equaliser presets and product artwork, unpacked from the user's own Creative
+# App install by the module's importer. The eleven genre presets that *do* ship are a different
+# thing -- observed on the wire, not copied from a vendor file. See the note in presets.py.
+presets.json
+device.png
 
 # Backups live beside the checkout, not inside it -- but guard against a stray one anyway.
 hardware-ui-backup-*.tar.gz

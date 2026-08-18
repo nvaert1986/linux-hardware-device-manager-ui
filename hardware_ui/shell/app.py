@@ -439,9 +439,16 @@ class Controller(QObject):
             log.exception("read failed for %s", device.info.uid)
             values = {}
         advisories = device.advisories()
+        # Drawings of the hardware, for the sections that name a place on it. Read here rather than
+        # inside `paint` so a module that reads a file to answer does it off the UI thread.
+        try:
+            diagrams = device.diagrams()
+        except Exception:
+            log.exception("could not build diagrams for %s", device.info.uid)
+            diagrams = {}
 
         def paint() -> None:
-            self._window.page.show_capabilities(caps)
+            self._window.page.show_capabilities(caps, diagrams)
             for form in self._window.page.forms().values():
                 for key, value in values.items():
                     form.set_value(key, value, confirmed=True)
@@ -539,17 +546,48 @@ class Controller(QObject):
                 # control showing what the user picked.
                 form = self._form_for(key)
                 if form is not None:
-                    form.set_value(key, form.value_of(key), confirmed=True)
+                    self._window.page.publish(key, form.value_of(key), confirmed=True)
                 return
         if cap is not None and cap.reboots:
             self._bridge.spawn(self._write_rebooting(key, value), label=f"write({key})")
             return
         self._bridge.spawn(self._write(key, value), label=f"write({key})")
 
+    async def _repaint_side_effects(self, cap: Any) -> None:
+        """Re-read the values a write moved besides its own, and repaint them.
+
+        Applying an equaliser preset writes eleven values in one action. The module's held state is
+        right immediately; the eleven sliders were not, because the shell repaints the control that
+        was written and nothing else. A module says which rows a write disturbs and this collects
+        them -- from held state, so it is free.
+        """
+        device = self._device
+        if device is None or cap is None or not cap.refreshes:
+            return
+        try:
+            values = await asyncio.wait_for(device.get_many(list(cap.refreshes)), WRITE_TIMEOUT)
+        except Exception:
+            # A repaint is a nicety; failing it must never turn a write that worked into an error.
+            log.debug("could not re-read after %s", cap.key, exc_info=True)
+            return
+        for key, value in values.items():
+            self._ui(self._window.page.publish, key, value, confirmed=True)
+
     def _group(self, key: str) -> list[str]:
+        """Which controls this write holds while it is in flight.
+
+        Three cases. An ``exclusive`` write owns the device -- a configuration sent as one block --
+        so it holds every row on the page; leaving the others live lets a value change after the
+        record carrying it was already built. ``writes_with`` holds the controls that ride in the
+        same message. Anything else holds only itself.
+        """
         device = self._device
         cap = device.capabilities.by_key(key) if device else None
-        if cap is None or not cap.writes_with:
+        if cap is None:
+            return [key]
+        if cap.exclusive:
+            return list(dict.fromkeys([key, *self._window.page.all_keys()]))
+        if not cap.writes_with:
             return [key]
         return list(dict.fromkeys((key, *cap.writes_with)))
 
@@ -566,50 +604,53 @@ class Controller(QObject):
         previous = form.value_of(key)
         group = self._group(key)
         revision = self._device.capabilities_revision
-        self._ui(form.clear_result, key)
-        self._ui(form.set_pending, group, key, value)
+        self._ui(self._window.page.clear_result, key)
+        self._ui(self._window.page.publish_pending, group, key, value)
         try:
             timeout = (cap.timeout if cap is not None and cap.timeout else 0.0) or WRITE_TIMEOUT
             landed = await asyncio.wait_for(self._device.set(key, value), timeout)
         except NotSupported as exc:
-            self._ui(form.set_result, key, False, str(exc))
+            self._ui(self._window.page.publish_result, key, False, str(exc))
             self._ui(form.mark_failed, key)
-            self._ui(form.set_value, key, previous, confirmed=True)
+            self._ui(self._window.page.publish, key, previous, confirmed=True)
             # Re-read advisories here too: a module can only discover "readable but not writable"
             # by attempting the write, so this failure is when the explanation becomes available.
             # Publishing it only on the success path left the control silently dead.
-            self._ui(form.set_advisories, self._device.advisories())
+            self._ui(self._window.page.publish_advisories, self._device.advisories())
             self._ui(self._window.notify, str(exc) or "This device does not support that setting",
                      "warning")
         except TimeoutError:
-            self._ui(form.set_result, key, False, "The device did not answer in time")
-            self._ui(form.set_value, key, previous, confirmed=True)
+            self._ui(self._window.page.publish_result, key, False,
+                     "The device did not answer in time")
+            self._ui(self._window.page.publish, key, previous, confirmed=True)
             self._ui(self._window.notify, "Device did not confirm the change", "error")
         except asyncio.CancelledError:
-            self._ui(form.set_value, key, previous, confirmed=True)
+            self._ui(self._window.page.publish, key, previous, confirmed=True)
             raise
         except Exception as exc:
             log.exception("write failed for %s", key)
-            self._ui(form.set_result, key, False, str(exc))
-            self._ui(form.set_value, key, previous, confirmed=True)
+            self._ui(self._window.page.publish_result, key, False, str(exc))
+            self._ui(self._window.page.publish, key, previous, confirmed=True)
             self._ui(self._window.notify, f"Could not apply: {exc}", "error")
         else:
             # A device may report the value it actually landed on -- a DDC panel that quantises
             # the request still applied the change, and the monitor is the source of truth.
-            self._ui(form.set_value, key, value if landed is None else landed, confirmed=True)
-            self._ui(form.set_advisories, self._device.advisories())
+            self._ui(self._window.page.publish, key, value if landed is None else landed,
+                     confirmed=True)
+            self._ui(self._window.page.publish_advisories, self._device.advisories())
+            await self._repaint_side_effects(cap)
             if cap is not None and cap.kind is Kind.ACTION:
                 # An action's effect is often invisible, so say plainly that it worked. A module
                 # may return a sentence explaining what happened; otherwise the label will do.
                 done = str(landed) if isinstance(landed, str) and landed else f"{cap.label}: done"
-                self._ui(form.set_result, key, True, done)
+                self._ui(self._window.page.publish_result, key, True, done)
                 self._ui(self._window.notify, done)
             if self._device.capabilities_revision != revision:
                 # The write changed the device's shape, not just a value -- a calibration run
                 # re-bounds every slider it probed. Repaint the whole page from the new set.
                 await self._show_connected(self._device)
         finally:
-            self._ui(form.clear_pending, group)
+            self._ui(self._window.page.publish_clear_pending, group)
 
     async def _write_rebooting(self, key: str, value: Any) -> None:
         """Write a setting that restarts the device.
@@ -623,7 +664,7 @@ class Controller(QObject):
             return
         uid = self._device.info.uid
         group = self._group(key)
-        self._ui(form.set_pending, group, key, value)
+        self._ui(self._window.page.publish_pending, group, key, value)
         failed: Exception | None = None
         try:
             await asyncio.wait_for(self._device.set(key, value), WRITE_TIMEOUT)
@@ -633,9 +674,9 @@ class Controller(QObject):
             log.exception("reboot write failed for %s", key)
             failed = exc
 
-        self._ui(form.clear_pending, group)
+        self._ui(self._window.page.publish_clear_pending, group)
         if failed is None:
-            self._ui(form.set_value, key, value, confirmed=True)
+            self._ui(self._window.page.publish, key, value, confirmed=True)
         else:
             self._ui(self._window.notify, f"Could not apply: {failed}", "error")
 

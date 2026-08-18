@@ -157,6 +157,15 @@ class Capability:
     adjacent rows, it does not reorder them.
     """
 
+    short_label: str = ""
+    """Alternative label for somewhere narrow, chiefly a :class:`~hardware_ui.core.diagram.Diagram`.
+
+    A form's label column is as wide as it needs to be, so "LB (left bumper)" is a good label
+    there. Beside a drawing it is not: the control sits in a fixed-width card and the parenthetical
+    is both clipped and redundant, because the picture is already pointing at the bumper. Empty
+    means "use :attr:`label` everywhere", which is right for most capabilities.
+    """
+
     icon: str = ""
     """freedesktop icon name. Prefer spec names (``audio-headphones``) so they resolve against
     Adwaita too when Breeze is not installed."""
@@ -196,6 +205,38 @@ class Capability:
     what turned speak-to-chat off while its sensitivity was being changed.
 
     Declare the full group on every member; the shell takes the union.
+    """
+
+    exclusive: bool = False
+    """While this write is in flight, disable **every** control on the device.
+
+    For a write that is not about one setting but about the whole device: an 8BitDo controller's
+    configuration is a single 532-byte block with one checksum, so its Sync sends the lot. Leaving
+    the rest of the page live during that means a dropdown can be changed while the record built
+    from it is halfway down the wire, and what reaches the controller is then neither the old
+    configuration nor the new one.
+
+    Distinct from :attr:`writes_with`, which is a *group* of controls that travel together and hold
+    each other in both directions. This is one-directional and needs no list: an action that owns
+    the device for a second says so, and nothing has to be kept in step with it as rows are added.
+    """
+
+    refreshes: tuple[str, ...] = ()
+    """Other capability keys whose values this write changes, to be re-read once it lands.
+
+    Distinct from :attr:`writes_with`, and the difference is direction. ``writes_with`` is about
+    what goes *out*: several controls ride in one protocol message, so writing any of them re-sends
+    the rest and all of them must be held pending together. This is about what comes *back*: one
+    write, but it moves values the user is looking at somewhere else on the page.
+
+    Applying an equaliser preset is the case that found it. It writes ten band gains and a preamp,
+    the module's held state is correct immediately -- and the eleven sliders on screen went on
+    showing the previous curve, because the shell repaints the control that was written and nothing
+    else. Nothing was wrong with the device or the module; the page was simply stale until a manual
+    refresh.
+
+    Re-read from the module's own state, so this costs no protocol traffic for any module that
+    holds state -- which, after a write, is all of them.
     """
 
     action_label: str = ""

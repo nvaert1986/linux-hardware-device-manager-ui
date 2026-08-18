@@ -1,0 +1,40 @@
+id = "eightbitdo_controllers"
+name = "8BitDo Xbox Controllers"
+category = "input"
+description = "Button remapping, sticks, triggers and vibration for 8BitDo's Xbox wired controllers"
+implementation = "hardware_ui.modules.eightbitdo_controllers.device:EightBitDoController"
+
+# The Ultimate Wired Controller for Xbox: the unit the record layout, the field map and the rolling
+# checksum were all decoded against, over both transports.
+#
+# Scoped to this product id rather than to 8BitDo's vendor id, which is the opposite of what the
+# Creative and Jabra modules do — and deliberately. Those talk to a vendor library that is
+# device-generic. Here there is no capability query at all: the byte offsets *are* the capability
+# list, and 8BitDo's other families (Pro 2, Ultimate BT, Micro) use different records and different
+# checksums. A vendor-wide rule would offer a confident page of wrong offsets and write them.
+[[match]]
+transport = "usb"
+vendor_id = "2dc8"
+product_id = "2002"
+status = "verified"
+
+# The same controller reached over its hidden BLE config radio, which is what the vendor's Android
+# app uses. It advertises as "82CE" only while the config-mode button is held, so it will not
+# appear in a normal scan — the module offers a scan action instead.
+#
+# "family" rather than "verified", unlike the USB rule above. The USB path has been read from and
+# written to on real hardware; this one sends the same save session and its L2CAP handling comes
+# from a project that was validated on it, but no controller has been opened through *this* code.
+# Promote it when one has been.
+#
+# **This rule is wider than it looks and that is a known risk.** "82CE" is the name every 8BitDo
+# controller advertises while its config button is held, not just this one — a Pro 2 or an Ultimate
+# BT would match it too, and those use different record layouts. The advertisement carries nothing
+# that identifies the model, which is why the rule cannot be narrowed here. Two consequences are
+# handled in the module: the controller drawings are withheld for anything that is not a known
+# product id, and the page says the model is unidentified. Writing to an unrecognised controller
+# over this path would write this controller's byte offsets into somebody else's record.
+[[match]]
+transport = "bluetooth"
+name_glob = "82CE"
+status = "family"

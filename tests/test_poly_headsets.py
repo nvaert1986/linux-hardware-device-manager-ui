@@ -488,3 +488,66 @@ def test_a_failed_import_is_reported_but_does_not_block_the_device(qapp, monkeyp
     assert vendor_data.ensure_vendor_data("poly_headsets", "Poly Headsets") is True
     assert "does not contain the catalogues" in warned[0]
     assert "still open" in warned[0]
+
+
+# --------------------------------------------------------------------------- identity strings
+#
+# Reported from the field: a Voyager 4320 showed its Hardware row as Chinese characters while the
+# serial and firmware beside it read fine. The reference implementation sniffed the first two
+# bytes for a NUL to choose between UTF-8 and UTF-16BE, and it was only ever run against a 4310.
+# Both encodings are now tried and the more legible result wins.
+
+from hardware_ui.modules.poly_headsets.protocol.session import decode_string  # noqa: E402
+
+
+def framed(body: bytes) -> bytes:
+    """A Deckard string payload: u16 big-endian byte length, then the bytes."""
+    return len(body).to_bytes(2, "big") + body
+
+
+def test_plain_ascii_decodes():
+    assert decode_string(framed(b"PLT-4310")) == "PLT-4310"
+
+
+def test_ascii_padded_to_its_field_width_decodes():
+    assert decode_string(framed(b"PLT-4310" + bytes(8))) == "PLT-4310"
+
+
+def test_utf16be_decodes():
+    assert decode_string(framed("PLT-4310".encode("utf-16-be"))) == "PLT-4310"
+
+
+def test_utf16be_padded_to_its_field_width_decodes():
+    assert decode_string(framed("PLT-4310".encode("utf-16-be") + bytes(8))) == "PLT-4310"
+
+
+def test_a_single_leading_nul_no_longer_turns_ascii_into_chinese():
+    """The first of the two failure modes. One stray NUL made the old sniff pick UTF-16BE, and
+    every pair of ASCII bytes then lands in the CJK block."""
+    assert decode_string(framed(b"\x00PLT-4310")) == "PLT-4310"
+
+
+def test_a_field_that_is_not_text_decodes_to_nothing_rather_than_mojibake():
+    """The second, and what the 4320 actually hit: bytes that are not a string in either encoding.
+    UTF-16BE renders them as CJK without complaint, so the result has to be rejected on content."""
+    assert decode_string(framed(bytes.fromhex("4FF5520052299A91002B0028"))) == ""
+
+
+def test_a_genuinely_accented_name_still_survives():
+    """The rejection is on illegibility, not on non-ASCII: a real name with an accent must pass."""
+    assert decode_string(framed("Vy-4320é".encode("utf-16-be"))) == "Vy-4320é"
+
+
+def test_an_empty_or_runt_payload_is_empty():
+    assert decode_string(b"") == ""
+    assert decode_string(framed(b"")) == ""
+    assert decode_string(b"\x00") == ""
+
+
+def test_utf16be_read_as_utf8_scores_badly_because_of_its_nuls():
+    """The bug in the first attempt at this fix: NULs were stripped before scoring, so the wrong
+    decoding scored a perfect 1.0 and won."""
+    from hardware_ui.modules.poly_headsets.protocol.session import _legible
+
+    wrong = "PLT-4310".encode("utf-16-be").decode("utf-8")
+    assert _legible(wrong) < _legible("PLT-4310")
