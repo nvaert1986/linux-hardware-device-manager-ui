@@ -1,6 +1,6 @@
 # Linux Hardware Device Manager UI (LHDMUI)
 
-**Version 0.10.1.** One uniform interface for configuring USB, Bluetooth, DDC/CI and V4L2 hardware
+**Version 0.10.3.** One uniform interface for configuring USB, Bluetooth, DDC/CI and V4L2 hardware
 on Linux.
 
 The distribution, the Python package and the desktop-entry id stay `hardware-ui`: those are
@@ -18,6 +18,16 @@ module declares almost nothing and still produces a correct page for a webcam no
 tested — which is what the whole architecture is aiming at.
 
 PyQt6 Widgets, so Breeze draws every control and it looks like the rest of your desktop. GPLv3.
+
+![Eight devices grouped by category in a sidebar, with a Dell monitor selected and its Color / Picture tab open beside it.](docs/screenshots/main-window.png)
+
+Everything in that window comes from the devices themselves. The sidebar is grouped by what a thing
+*is*, one row per physical device however many ways it can be reached; the tabs, the sliders and
+their ranges are built from what the selected device said it supports, not from a layout written per
+model. Two identical monitors are told apart by which port they are on. A headset that is switched
+off keeps its place under **Disconnected devices** rather than vanishing, so it can be woken rather
+than hunted for. And the note under the calibration button is the sort of thing this project tries to
+do everywhere: say what the control will actually do to your hardware before you press it.
 
 ---
 
